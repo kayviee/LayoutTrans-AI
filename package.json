@@ -1,0 +1,13 @@
+{
+  "name": "layouttrans-ai",
+  "version": "1.0.0",
+  "description": "LayoutTrans AI - Academic Book Layout-Preserving Translator",
+  "scripts": {
+    "dev": "npx -y serve -p 3000 .",
+    "start": "npx -y serve -p 3000 .",
+    "build": "echo 'Static web app ready'"
+  },
+  "keywords": ["gemini", "ocr", "translation", "pdf", "layout-preservation"],
+  "author": "Kayvie Nguyen",
+  "license": "MIT"
+}
