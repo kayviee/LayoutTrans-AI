@@ -1,0 +1,8 @@
+{
+  "name": "LayoutTrans-AI",
+  "description": "Dịch thuật sách học thuật tiếng Anh sang tiếng Việt, bảo toàn 100% cấu trúc dàn trang, bảng biểu, 2 cột và công thức toán KaTeX.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
