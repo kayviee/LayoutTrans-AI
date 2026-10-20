@@ -68,6 +68,8 @@ class LayoutTransApp {
     this.apiKeyInput = document.getElementById('apiKeyInput');
     this.toggleApiKeyVis = document.getElementById('toggleApiKeyVis');
     this.apiKeyStatusDot = document.getElementById('apiKeyStatusDot');
+    this.apiKeyStatusText = document.getElementById('apiKeyStatusText');
+    this.apiKeyTestResult = document.getElementById('apiKeyTestResult');
     this.chunkSizeInput = document.getElementById('chunkSizeInput');
     this.chunkSizeDisplay = document.getElementById('chunkSizeDisplay');
     this.customPromptInput = document.getElementById('customPromptInput');
@@ -568,33 +570,72 @@ Chỉ trả về trực tiếp mã HTML sạch sẽ của phần nội dung dị
   async testApiKeyConnection() {
     const key = this.apiKeyInput.value.trim();
     if (!key) {
+      if (this.apiKeyTestResult) {
+        this.apiKeyTestResult.style.display = 'flex';
+        this.apiKeyTestResult.className = 'api-test-result error';
+        this.apiKeyTestResult.innerHTML = '<span>⚠️ Vui lòng dán mã API Key vào ô trên trước khi kiểm tra!</span>';
+      }
       this.showToast('Vui lòng nhập API Key để kiểm tra!', 'warning');
       return;
     }
 
     this.testApiKeyBtn.disabled = true;
     this.testApiKeyBtn.textContent = 'Đang kiểm tra...';
+    if (this.apiKeyTestResult) {
+      this.apiKeyTestResult.style.display = 'flex';
+      this.apiKeyTestResult.className = 'api-test-result loading';
+      this.apiKeyTestResult.innerHTML = '<span>⏳ Đang kết nối tới máy chủ Google Gemini... (Vui lòng đợi vài giây)</span>';
+    }
 
     try {
-      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${encodeURIComponent(key)}`;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
+
+      // Query models list with key - fast 200ms check, 0 tokens consumed
+      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(key)}`;
       const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: 'Trả lời đúng 1 chữ: OK' }] }]
-        })
+        method: 'GET',
+        signal: controller.signal
       });
+      clearTimeout(timeoutId);
 
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.error?.message || `HTTP ${res.status}`);
+        const rawMsg = errData.error?.message || `HTTP ${res.status}`;
+        throw new Error(rawMsg);
       }
 
-      this.showToast('✅ Kết nối Google Gemini API thành công! API Key hợp lệ.', 'success');
-      this.apiKeyStatusDot.classList.add('connected');
+      const data = await res.json();
+      if (!data.models || data.models.length === 0) {
+        throw new Error('Google không trả về danh sách model cho Key này.');
+      }
+
+      // Auto-save key on success
+      this.apiKey = key;
+      localStorage.setItem('layouttrans_gemini_key', key);
+      this.updateApiKeyStatus();
+
+      if (this.apiKeyTestResult) {
+        this.apiKeyTestResult.style.display = 'flex';
+        this.apiKeyTestResult.className = 'api-test-result success';
+        this.apiKeyTestResult.innerHTML = '<span>✅ <strong>KẾT NỐI THÀNH CÔNG!</strong> API Key hoàn toàn hợp lệ và đã tự động lưu. Bạn có thể đóng bảng này và bắt đầu dịch ngay!</span>';
+      }
+      this.showToast('✅ Kết nối Google Gemini API thành công!', 'success');
     } catch (err) {
-      this.showToast(`❌ API Key không hợp lệ: ${err.message}`, 'error');
-      this.apiKeyStatusDot.classList.remove('connected');
+      console.error('Lỗi kiểm tra API Key:', err);
+      let friendlyMsg = err.message;
+      if (err.name === 'AbortError') {
+        friendlyMsg = 'Hết thời gian chờ (Timeout sau 10 giây). Vui lòng kiểm tra lại mạng Internet hoặc VPN!';
+      } else if (err.message.includes('API key not valid')) {
+        friendlyMsg = 'Mã API Key không hợp lệ! Vui lòng copy lại từ aistudio.google.com/api-keys';
+      }
+
+      if (this.apiKeyTestResult) {
+        this.apiKeyTestResult.style.display = 'flex';
+        this.apiKeyTestResult.className = 'api-test-result error';
+        this.apiKeyTestResult.innerHTML = `<span>❌ <strong>LỖI:</strong> ${friendlyMsg}</span>`;
+      }
+      this.showToast(`Lỗi kết nối: ${friendlyMsg}`, 'error');
     } finally {
       this.testApiKeyBtn.disabled = false;
       this.testApiKeyBtn.textContent = 'Kiểm tra kết nối';
@@ -854,6 +895,16 @@ Chỉ trả về trực tiếp mã HTML sạch sẽ của phần nội dung dị
     this.chunkSizeInput.value = this.chunkSize;
     this.chunkSizeDisplay.textContent = `${this.chunkSize} trang`;
     this.customPromptInput.value = this.customPrompt;
+
+    if (this.apiKeyTestResult) {
+      if (this.apiKey) {
+        this.apiKeyTestResult.style.display = 'flex';
+        this.apiKeyTestResult.className = 'api-test-result success';
+        this.apiKeyTestResult.innerHTML = '<span>🟢 <strong>Đang dùng Key đã lưu.</strong> Bấm nút "Kiểm tra kết nối" để test lại đường truyền nếu muốn.</span>';
+      } else {
+        this.apiKeyTestResult.style.display = 'none';
+      }
+    }
     this.settingsModal.style.display = 'flex';
   }
 
@@ -881,9 +932,11 @@ Chỉ trả về trực tiếp mã HTML sạch sẽ của phần nội dung dị
     if (this.apiKey) {
       this.apiKeyStatusDot.classList.add('connected');
       this.apiKeyStatusDot.title = 'Đã kết nối Gemini API';
+      if (this.apiKeyStatusText) this.apiKeyStatusText.textContent = 'Đã kết nối Key';
     } else {
       this.apiKeyStatusDot.classList.remove('connected');
       this.apiKeyStatusDot.title = 'Chưa thiết lập API Key';
+      if (this.apiKeyStatusText) this.apiKeyStatusText.textContent = 'Chưa có Key';
     }
   }
 

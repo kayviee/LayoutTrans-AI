@@ -1072,6 +1072,36 @@ body {
   line-height: 1.4;
 }
 
+.api-test-result {
+  margin-top: 10px;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  font-size: 0.83rem;
+  line-height: 1.45;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  animation: fadeIn 0.2s ease;
+}
+
+.api-test-result.success {
+  background: rgba(16, 185, 129, 0.15);
+  border: 1px solid var(--success);
+  color: #10b981;
+}
+
+.api-test-result.error {
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid var(--danger);
+  color: #ef4444;
+}
+
+.api-test-result.loading {
+  background: rgba(99, 102, 241, 0.15);
+  border: 1px solid var(--accent-primary);
+  color: var(--accent-primary);
+}
+
 .range-wrapper {
   display: flex;
   align-items: center;
