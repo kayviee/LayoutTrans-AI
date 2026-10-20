@@ -18,11 +18,19 @@ class LayoutTransApp {
       localStorage.setItem('layouttrans_model', this.selectedModel);
     }
 
-    this.chunkSize = parseInt(localStorage.getItem('layouttrans_chunk_size') || '4', 10);
+    let savedChunkSize = localStorage.getItem('layouttrans_chunk_size');
+    if (!savedChunkSize || savedChunkSize === '4') {
+      this.chunkSize = 2;
+      localStorage.setItem('layouttrans_chunk_size', '2');
+    } else {
+      this.chunkSize = parseInt(savedChunkSize, 10);
+    }
     this.customPrompt = localStorage.getItem('layouttrans_custom_prompt') || '';
     
     this.currentFile = null;
     this.pdfDoc = null;
+    this.pdfLibMasterDoc = null;
+    this.currentAbortController = null;
     this.totalPages = 0;
     this.chunks = [];
     
@@ -254,6 +262,19 @@ class LayoutTransApp {
       const rawBuffer = await file.arrayBuffer();
       const pdfJsBuffer = rawBuffer.slice(0);
 
+      // Pre-load PDFLib master document once so extracting pages later is instantaneous (< 0.1s)
+      const pdfLibInstance = window.PDFLib || (typeof PDFLib !== 'undefined' ? PDFLib : null);
+      if (pdfLibInstance) {
+        try {
+          this.pdfLibMasterDoc = await pdfLibInstance.PDFDocument.load(rawBuffer.slice(0));
+        } catch (e) {
+          console.warn('PDFLib preload error, will reload on demand:', e);
+          this.pdfLibMasterDoc = null;
+        }
+      } else {
+        this.pdfLibMasterDoc = null;
+      }
+
       // Load with PDF.js for visual rendering
       const loadingTask = pdfjsLib.getDocument({ data: pdfJsBuffer });
       this.pdfDoc = await loadingTask.promise;
@@ -391,9 +412,12 @@ class LayoutTransApp {
       try {
         await this.processChunkWithGemini(chunk);
         chunk.status = 'completed';
-        this.renderChunkOutput(chunk);
         this.updateProgressUI();
       } catch (err) {
+        if (err.name === 'AbortError') {
+          console.log('Quá trình dịch đã được tạm dừng bởi người dùng.');
+          break;
+        }
         console.error(`Lỗi dịch chunk ${chunk.id}:`, err);
         chunk.status = 'error';
         chunk.error = err.message;
@@ -424,6 +448,9 @@ class LayoutTransApp {
   togglePauseTranslation() {
     this.isPaused = !this.isPaused;
     if (this.isPaused) {
+      if (this.currentAbortController) {
+        try { this.currentAbortController.abort(); } catch (e) {}
+      }
       this.pauseTranslateBtn.innerHTML = '<span>Tiếp tục</span>';
       this.pauseTranslateBtn.className = 'btn btn-primary';
       this.showToast('Đã tạm dừng quá trình dịch', 'info');
@@ -436,13 +463,54 @@ class LayoutTransApp {
   }
 
   async processChunkWithGemini(chunk) {
-    this.progressText.textContent = `Đang dịch trang ${chunk.startPage} - ${chunk.endPage}...`;
+    const startTime = Date.now();
+    let chunkTimerInterval = null;
 
-    // 1. Extract sub-PDF bytes cleanly from fresh arrayBuffer
-    const subPdfBase64 = await this.extractPdfChunkBase64(chunk.startPage, chunk.endPage);
+    // 1. Prepare chunk container immediately for live real-time streaming
+    let chunkBlock = document.getElementById(`chunk-block-${chunk.id}`);
+    if (!chunkBlock) {
+      chunkBlock = document.createElement('article');
+      chunkBlock.className = 'book-chunk-block active-streaming';
+      chunkBlock.id = `chunk-block-${chunk.id}`;
+      this.translatedContent.appendChild(chunkBlock);
+    } else {
+      chunkBlock.className = 'book-chunk-block active-streaming';
+    }
 
-    // 2. Build Specialized Layout-Preserving Translation System Instruction
-    const systemInstruction = `Bạn là chuyên gia dịch thuật và chế bản tài liệu/sách học thuật chuyên nghiệp.
+    chunkBlock.innerHTML = `
+      <div class="chunk-header-pill streaming" id="chunk-pill-${chunk.id}">
+        <svg class="spin-icon" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 1 10 10"/></svg>
+        <span>Đang dịch trang ${chunk.startPage} – ${chunk.endPage}</span>
+        <span class="chunk-timer-badge" id="chunk-timer-${chunk.id}">0s</span>
+      </div>
+      <div class="chunk-inner-content streaming-cursor" id="chunk-content-${chunk.id}">
+        <div class="streaming-placeholder">
+          <svg class="spin-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 1 10 10"/></svg>
+          Đang nạp trang & kết nối với Google AI Studio...
+        </div>
+      </div>
+    `;
+    chunkBlock.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+    const timerEl = document.getElementById(`chunk-timer-${chunk.id}`);
+    const contentEl = document.getElementById(`chunk-content-${chunk.id}`);
+    const pillEl = document.getElementById(`chunk-pill-${chunk.id}`);
+
+    chunkTimerInterval = setInterval(() => {
+      const elapsed = Math.round((Date.now() - startTime) / 1000);
+      if (timerEl) timerEl.textContent = `${elapsed}s`;
+    }, 1000);
+
+    try {
+      this.progressText.textContent = `Đang trích xuất trang ${chunk.startPage} - ${chunk.endPage}...`;
+
+      // 1. Fast sub-PDF extraction from cached master document (< 0.1s)
+      const subPdfBase64 = await this.extractPdfChunkBase64(chunk.startPage, chunk.endPage);
+
+      this.progressText.textContent = `Google AI đang bắt đầu dịch trang ${chunk.startPage} - ${chunk.endPage}...`;
+
+      // 2. Build Specialized Layout-Preserving Translation System Instruction
+      const systemInstruction = `Bạn là chuyên gia dịch thuật và chế bản tài liệu/sách học thuật chuyên nghiệp.
 Nhiệm vụ của bạn là đọc các trang PDF gốc đính kèm và:
 1. DỊCH TOÀN BỘ NỘI DUNG SANG TIẾNG VIỆT tự nhiên, chuẩn mực văn phong học thuật cao cấp.
 2. BẢO TOÀN CHÍNH XÁC 100% CẤU TRÚC VÀ BỐ CỤC DÀN TRANG GỐC:
@@ -467,69 +535,156 @@ ${this.customPrompt ? `\nYÊU CẦU BỔ SUNG CỦA NGƯỜI DÙNG: ${this.custo
 
 Chỉ trả về trực tiếp mã HTML sạch sẽ của phần nội dung dịch (không bọc trong thẻ \`\`\`html hay giải thích thừa).`;
 
-    // 3. Make REST API Request to Google Gemini API
-    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${this.selectedModel}:generateContent?key=${encodeURIComponent(this.apiKey)}`;
+      // 3. Make Streaming Request to Google Gemini API (SSE)
+      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${this.selectedModel}:streamGenerateContent?alt=sse&key=${encodeURIComponent(this.apiKey)}`;
 
-    const requestBody = {
-      contents: [
-        {
-          parts: [
-            {
-              inlineData: {
-                mimeType: "application/pdf",
-                data: subPdfBase64
+      const requestBody = {
+        contents: [
+          {
+            parts: [
+              {
+                inlineData: {
+                  mimeType: "application/pdf",
+                  data: subPdfBase64
+                }
+              },
+              {
+                text: `Hãy dịch toàn bộ nội dung từ trang ${chunk.startPage} đến trang ${chunk.endPage} này sang tiếng Việt, bảo toàn trọn vẹn bố cục dàn trang như đã hướng dẫn.`
               }
-            },
-            {
-              text: `Hãy dịch toàn bộ nội dung từ trang ${chunk.startPage} đến trang ${chunk.endPage} này sang tiếng Việt, bảo toàn trọn vẹn bố cục dàn trang như đã hướng dẫn.`
+            ]
+          }
+        ],
+        systemInstruction: {
+          parts: [{ text: systemInstruction }]
+        },
+        generationConfig: {
+          temperature: 0.1
+        },
+        safetySettings: [
+          { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
+          { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
+          { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
+          { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' }
+        ]
+      };
+
+      this.currentAbortController = new AbortController();
+
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody),
+        signal: this.currentAbortController.signal
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        const msg = errorData.error?.message || `HTTP ${response.status} ${response.statusText}`;
+        throw new Error(`Google API (HTTP ${response.status}): ${msg}`);
+      }
+
+      // 4. Stream response body tokens live
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder('utf-8');
+      let buffer = '';
+      let accumulatedText = '';
+      let hasReceivedFirstToken = false;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop(); // keep unfinished fragment
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (trimmed.startsWith('data: ')) {
+            const jsonStr = trimmed.slice(6).trim();
+            if (!jsonStr || jsonStr === '[DONE]') continue;
+            try {
+              const data = JSON.parse(jsonStr);
+              const partText = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+              if (partText) {
+                if (!hasReceivedFirstToken) {
+                  hasReceivedFirstToken = true;
+                }
+                accumulatedText += partText;
+
+                // Live clean markdown code fence while streaming
+                let liveHtml = accumulatedText.replace(/^```(?:html|markdown|xml)?\s*/i, '');
+                contentEl.innerHTML = liveHtml;
+
+                const elapsed = Math.round((Date.now() - startTime) / 1000);
+                const wordCount = Math.round(accumulatedText.length / 5);
+                this.progressText.textContent = `Đang nhận dữ liệu trang ${chunk.startPage}-${chunk.endPage} [${elapsed}s] • ~${wordCount} từ`;
+              }
+
+              const blockReason = data?.promptFeedback?.blockReason;
+              if (blockReason) {
+                throw new Error(`Bị Google AI chặn (Lý do: ${blockReason})`);
+              }
+            } catch (jsonErr) {
+              // Ignore partial JSON parsing glitches in stream
             }
-          ]
+          }
         }
-      ],
-      systemInstruction: {
-        parts: [{ text: systemInstruction }]
-      },
-      generationConfig: {
-        temperature: 0.1
-      },
-      safetySettings: [
-        { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
-        { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
-        { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
-        { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' }
-      ]
-    };
-
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestBody)
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      const msg = errorData.error?.message || `HTTP ${response.status} ${response.statusText}`;
-      throw new Error(`Google API (HTTP ${response.status}): ${msg}`);
-    }
-
-    const data = await response.json();
-    let text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-    
-    if (!text) {
-      const finishReason = data?.candidates?.[0]?.finishReason;
-      const blockReason = data?.promptFeedback?.blockReason;
-      if (blockReason) {
-        throw new Error(`Bị Google AI chặn (Lý do: ${blockReason})`);
       }
-      if (finishReason && finishReason !== 'STOP') {
-        throw new Error(`AI kết thúc bất thường: ${finishReason}`);
-      }
-      throw new Error('Google AI không phản hồi nội dung văn bản cho trang này.');
-    }
 
-    // Clean markdown code fence if present
-    text = text.replace(/^```(?:html|markdown|xml)?\s*/i, '').replace(/\s*```$/i, '').trim();
-    chunk.translatedHtml = text;
+      // Process any remaining bytes in buffer
+      if (buffer.trim().startsWith('data: ')) {
+        const jsonStr = buffer.trim().slice(6).trim();
+        if (jsonStr && jsonStr !== '[DONE]') {
+          try {
+            const data = JSON.parse(jsonStr);
+            const partText = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+            if (partText) accumulatedText += partText;
+          } catch (e) {}
+        }
+      }
+
+      clearInterval(chunkTimerInterval);
+      const totalElapsed = Math.round((Date.now() - startTime) / 1000);
+
+      if (!accumulatedText.trim()) {
+        throw new Error('Google AI không phản hồi nội dung văn bản nào cho trang này.');
+      }
+
+      // Final clean
+      let finalText = accumulatedText.replace(/^```(?:html|markdown|xml)?\s*/i, '').replace(/\s*```$/i, '').trim();
+      chunk.translatedHtml = finalText;
+
+      // Final styling & math typesetting
+      chunkBlock.className = 'book-chunk-block';
+      contentEl.classList.remove('streaming-cursor');
+      contentEl.innerHTML = finalText;
+
+      pillEl.className = 'chunk-header-pill';
+      pillEl.innerHTML = `
+        <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+        <span>Trang ${chunk.startPage} – ${chunk.endPage}</span>
+        <span class="chunk-timer-badge" style="color:var(--success)">${totalElapsed}s</span>
+      `;
+
+      if (window.renderMathInElement) {
+        renderMathInElement(chunkBlock, {
+          delimiters: [
+            { left: '$$', right: '$$', display: true },
+            { left: '$', right: '$', display: false },
+            { left: '\\(', right: '\\)', display: false },
+            { left: '\\[', right: '\\]', display: true }
+          ],
+          throwOnError: false
+        });
+      }
+
+    } catch (err) {
+      if (chunkTimerInterval) clearInterval(chunkTimerInterval);
+      if (contentEl) contentEl.classList.remove('streaming-cursor');
+      if (chunkBlock) chunkBlock.classList.remove('active-streaming');
+      throw err;
+    }
   }
 
   async extractPdfChunkBase64(startPage, endPage) {
@@ -538,12 +693,14 @@ Chỉ trả về trực tiếp mã HTML sạch sẽ của phần nội dung dị
       throw new Error('Thư viện xử lý PDF (PDFLib) chưa nạp xong. Vui lòng tải lại trang (F5).');
     }
 
-    // CRITICAL: Fresh read from File to ensure buffer is never detached
-    const freshArrayBuffer = await this.currentFile.arrayBuffer();
-    const srcDoc = await pdfLibInstance.PDFDocument.load(freshArrayBuffer);
-    const subDoc = await pdfLibInstance.PDFDocument.create();
+    // Use cached master document if available, or load once
+    if (!this.pdfLibMasterDoc) {
+      const freshArrayBuffer = await this.currentFile.arrayBuffer();
+      this.pdfLibMasterDoc = await pdfLibInstance.PDFDocument.load(freshArrayBuffer);
+    }
 
-    const pageCount = srcDoc.getPageCount();
+    const subDoc = await pdfLibInstance.PDFDocument.create();
+    const pageCount = this.pdfLibMasterDoc.getPageCount();
     const pageIndices = [];
     for (let p = startPage; p <= endPage; p++) {
       if (p <= pageCount) {
@@ -555,7 +712,7 @@ Chỉ trả về trực tiếp mã HTML sạch sẽ của phần nội dung dị
       throw new Error(`Không tìm thấy trang từ ${startPage} đến ${endPage}`);
     }
 
-    const copiedPages = await subDoc.copyPages(srcDoc, pageIndices);
+    const copiedPages = await subDoc.copyPages(this.pdfLibMasterDoc, pageIndices);
     copiedPages.forEach(page => subDoc.addPage(page));
 
     const subPdfBytes = await subDoc.save();
@@ -947,8 +1104,12 @@ Chỉ trả về trực tiếp mã HTML sạch sẽ của phần nội dung dị
 
   resetWorkspace() {
     if (confirm('Bạn có chắc muốn đóng tài liệu hiện tại và chọn tài liệu khác không?')) {
+      if (this.currentAbortController) {
+        try { this.currentAbortController.abort(); } catch(e) {}
+      }
       this.currentFile = null;
       this.pdfDoc = null;
+      this.pdfLibMasterDoc = null;
       this.chunks = [];
       this.isTranslating = false;
       this.isPaused = false;

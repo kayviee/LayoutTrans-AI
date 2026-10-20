@@ -742,6 +742,14 @@ body {
   padding-bottom: 2rem;
   border-bottom: 1px dashed var(--border-color);
   animation: fadeIn 0.4s ease;
+  transition: all 0.3s ease;
+}
+
+.book-chunk-block.active-streaming {
+  border-left: 3px solid var(--accent-primary);
+  padding-left: 1.25rem;
+  background: rgba(99, 102, 241, 0.03);
+  border-radius: var(--radius-sm);
 }
 
 .chunk-header-pill {
@@ -756,6 +764,63 @@ body {
   font-size: 0.72rem;
   font-weight: 600;
   margin-bottom: 1.5rem;
+  transition: all 0.25s ease;
+}
+
+.chunk-header-pill.streaming {
+  background: rgba(99, 102, 241, 0.22);
+  color: #818cf8;
+  border-color: rgba(99, 102, 241, 0.45);
+  box-shadow: 0 0 12px rgba(99, 102, 241, 0.25);
+}
+
+.chunk-timer-badge {
+  display: inline-flex;
+  align-items: center;
+  background: rgba(0, 0, 0, 0.25);
+  padding: 1px 7px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 600;
+  margin-left: 4px;
+  color: var(--warning);
+}
+
+.spin-icon {
+  animation: spin 1s linear infinite;
+  display: inline-block;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.streaming-placeholder {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 1.25rem;
+  color: var(--text-secondary);
+  font-style: italic;
+  font-size: 0.92rem;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: var(--radius-sm);
+  border: 1px dashed var(--border-color);
+}
+
+.streaming-cursor::after {
+  content: '▋';
+  color: var(--accent-primary);
+  font-weight: bold;
+  animation: blinkCursor 0.8s infinite;
+  margin-left: 3px;
+}
+
+@keyframes blinkCursor {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
 }
 
 /* Typography Inside Translated Book */
