@@ -533,10 +533,15 @@ Chỉ trả về trực tiếp mã HTML sạch sẽ của phần nội dung dị
   }
 
   async extractPdfChunkBase64(startPage, endPage) {
+    const pdfLibInstance = window.PDFLib || (typeof PDFLib !== 'undefined' ? PDFLib : null);
+    if (!pdfLibInstance) {
+      throw new Error('Thư viện xử lý PDF (PDFLib) chưa nạp xong. Vui lòng tải lại trang (F5).');
+    }
+
     // CRITICAL: Fresh read from File to ensure buffer is never detached
     const freshArrayBuffer = await this.currentFile.arrayBuffer();
-    const srcDoc = await PDFLib.PDFDocument.load(freshArrayBuffer);
-    const subDoc = await PDFLib.PDFDocument.create();
+    const srcDoc = await pdfLibInstance.PDFDocument.load(freshArrayBuffer);
+    const subDoc = await pdfLibInstance.PDFDocument.create();
 
     const pageCount = srcDoc.getPageCount();
     const pageIndices = [];
