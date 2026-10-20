@@ -1,5 +1,5 @@
 /**
- * LayoutTrans AI — Application Core
+ * LayoutTrans AI — Application Core (v1.1 Robust Edition)
  * Client-Side PDF Chunking, Gemini Multimodal Translation, Layout Preservation & Dual-Pane Viewer
  */
 
@@ -11,13 +11,18 @@ if (window.pdfjsLib) {
 class LayoutTransApp {
   constructor() {
     this.apiKey = localStorage.getItem('layouttrans_gemini_key') || '';
-    this.selectedModel = localStorage.getItem('layouttrans_model') || 'gemini-2.5-flash';
+    this.selectedModel = localStorage.getItem('layouttrans_model') || 'gemini-flash-latest';
+    // Migration: fix invalid model name if stored previously
+    if (this.selectedModel === 'gemini-2.5-flash' || this.selectedModel === 'gemini-1.5-flash') {
+      this.selectedModel = 'gemini-flash-latest';
+      localStorage.setItem('layouttrans_model', this.selectedModel);
+    }
+
     this.chunkSize = parseInt(localStorage.getItem('layouttrans_chunk_size') || '4', 10);
     this.customPrompt = localStorage.getItem('layouttrans_custom_prompt') || '';
     
     this.currentFile = null;
     this.pdfDoc = null;
-    this.pdfArrayBuffer = null;
     this.totalPages = 0;
     this.chunks = [];
     
@@ -59,6 +64,7 @@ class LayoutTransApp {
     this.closeSettingsBtn = document.getElementById('closeSettingsBtn');
     this.cancelSettingsBtn = document.getElementById('cancelSettingsBtn');
     this.saveSettingsBtn = document.getElementById('saveSettingsBtn');
+    this.testApiKeyBtn = document.getElementById('testApiKeyBtn');
     this.apiKeyInput = document.getElementById('apiKeyInput');
     this.toggleApiKeyVis = document.getElementById('toggleApiKeyVis');
     this.apiKeyStatusDot = document.getElementById('apiKeyStatusDot');
@@ -146,6 +152,9 @@ class LayoutTransApp {
     this.closeSettingsBtn.addEventListener('click', () => this.closeSettings());
     this.cancelSettingsBtn.addEventListener('click', () => this.closeSettings());
     this.saveSettingsBtn.addEventListener('click', () => this.saveSettings());
+    if (this.testApiKeyBtn) {
+      this.testApiKeyBtn.addEventListener('click', () => this.testApiKeyConnection());
+    }
     this.toggleApiKeyVis.addEventListener('click', () => {
       this.apiKeyInput.type = this.apiKeyInput.type === 'password' ? 'text' : 'password';
     });
@@ -236,13 +245,15 @@ class LayoutTransApp {
       this.currentFileName.textContent = file.name;
       this.currentFileName.title = file.name;
 
-      this.showToast('Đang đọc cấu trúc tài liệu PDF...', 'info');
+      this.showToast('Đang nạp tài liệu...', 'info');
 
-      // Read array buffer
-      this.pdfArrayBuffer = await file.arrayBuffer();
+      // CRITICAL FIX: Pass a cloned slice of ArrayBuffer to PDF.js
+      // because PDF.js transfers (detaches) the buffer to its Web Worker!
+      const rawBuffer = await file.arrayBuffer();
+      const pdfJsBuffer = rawBuffer.slice(0);
 
       // Load with PDF.js for visual rendering
-      const loadingTask = pdfjsLib.getDocument({ data: this.pdfArrayBuffer });
+      const loadingTask = pdfjsLib.getDocument({ data: pdfJsBuffer });
       this.pdfDoc = await loadingTask.promise;
       this.totalPages = this.pdfDoc.numPages;
 
@@ -279,7 +290,7 @@ class LayoutTransApp {
         id: chunkId++,
         startPage: start,
         endPage: end,
-        status: 'pending', // pending, processing, completed, error
+        status: 'pending',
         translatedHtml: '',
         error: null
       });
@@ -343,7 +354,7 @@ class LayoutTransApp {
       return;
     }
 
-    if (!this.pdfArrayBuffer) {
+    if (!this.currentFile) {
       this.showToast('Vui lòng tải lên tài liệu PDF trước!', 'warning');
       return;
     }
@@ -364,12 +375,12 @@ class LayoutTransApp {
     for (let i = 0; i < this.chunks.length; i++) {
       if (!this.isTranslating) break;
       if (this.isPaused) {
-        this.progressText.textContent = `Đang tạm dừng tại chunk ${i + 1}/${this.chunks.length}`;
+        this.progressText.textContent = `Đang tạm dừng tại phần ${i + 1}/${this.chunks.length}`;
         break;
       }
 
       const chunk = this.chunks[i];
-      if (chunk.status === 'completed') continue; // skip already completed
+      if (chunk.status === 'completed') continue;
 
       chunk.status = 'processing';
       this.currentChunkIndex = i;
@@ -384,11 +395,16 @@ class LayoutTransApp {
         console.error(`Lỗi dịch chunk ${chunk.id}:`, err);
         chunk.status = 'error';
         chunk.error = err.message;
-        this.showToast(`Lỗi chunk ${chunk.id} (Trang ${chunk.startPage}-${chunk.endPage}): ${err.message}`, 'error');
-        // If rate limit / quota, suggest waiting or changing key
-        if (err.message.includes('429') || err.message.includes('Quota')) {
+        this.showToast(`Lỗi phần ${chunk.id} (Trang ${chunk.startPage}-${chunk.endPage}): ${err.message}`, 'error');
+        
+        // If rate limit / quota
+        if (err.message.includes('429') || err.message.includes('RESOURCE_EXHAUSTED') || err.message.includes('Quota')) {
           this.togglePauseTranslation();
           this.showToast('Đã chạm hạn mức API Quota của Google. Hãy thử đổi sang model Flash hoặc đổi API key khác!', 'warning');
+          break;
+        } else {
+          // Pause on unexpected error so user sees the message
+          this.togglePauseTranslation();
           break;
         }
       }
@@ -420,12 +436,12 @@ class LayoutTransApp {
   async processChunkWithGemini(chunk) {
     this.progressText.textContent = `Đang dịch trang ${chunk.startPage} - ${chunk.endPage}...`;
 
-    // 1. Extract sub-PDF bytes using PDF-Lib
+    // 1. Extract sub-PDF bytes cleanly from fresh arrayBuffer
     const subPdfBase64 = await this.extractPdfChunkBase64(chunk.startPage, chunk.endPage);
 
     // 2. Build Specialized Layout-Preserving Translation System Instruction
-    const systemInstruction = `Bạn là chuyên gia chuyển ngữ và chế bản tài liệu/sách học thuật chuyên nghiệp.
-Nhiệm vụ của bạn là đọc các trang tài liệu PDF gốc đính kèm (ngôn ngữ nguồn) và:
+    const systemInstruction = `Bạn là chuyên gia dịch thuật và chế bản tài liệu/sách học thuật chuyên nghiệp.
+Nhiệm vụ của bạn là đọc các trang PDF gốc đính kèm và:
 1. DỊCH TOÀN BỘ NỘI DUNG SANG TIẾNG VIỆT tự nhiên, chuẩn mực văn phong học thuật cao cấp.
 2. BẢO TOÀN CHÍNH XÁC 100% CẤU TRÚC VÀ BỐ CỤC DÀN TRANG GỐC:
    - TIÊU ĐỀ: Giữ đúng cấp bậc H1 (Tên chương/phần lớn), H2 (Đề mục mục lớn), H3 (Tiểu mục con).
@@ -439,7 +455,6 @@ Nhiệm vụ của bạn là đọc các trang tài liệu PDF gốc đính kèm
        <div class="callout-title">Ghi chú / Định nghĩa / Lưu ý</div>
        <p>[Nội dung dịch]</p>
      </div>
-     (Dùng các class: callout-note, callout-tip, callout-warning, callout-definition tùy ngữ cảnh).
    - BẢNG BIỂU: Dùng thẻ <table>...</table> với header <th> và các dòng <td> được dịch đầy đủ.
    - CÔNG THỨC TOÁN HỌC: BẢO TOÀN NGUYÊN VẸN các công thức toán/lý hóa bằng chuẩn LaTeX:
      * Công thức trong dòng: dùng $kí_hiệu$
@@ -448,7 +463,7 @@ Nhiệm vụ của bạn là đọc các trang tài liệu PDF gốc đính kèm
    - ĐOẠN VĂN: Căn đều, ngắt đoạn tự nhiên, giữ các liên kết hoặc ghi chú chân trang nếu có.
 ${this.customPrompt ? `\nYÊU CẦU BỔ SUNG CỦA NGƯỜI DÙNG: ${this.customPrompt}` : ''}
 
-Chỉ trả về trực tiếp mã HTML/Semantic sạch sẽ của phần nội dung dịch (không bọc trong thẻ \`\`\`html hay giải thích thừa).`;
+Chỉ trả về trực tiếp mã HTML sạch sẽ của phần nội dung dịch (không bọc trong thẻ \`\`\`html hay giải thích thừa).`;
 
     // 3. Make REST API Request to Google Gemini API
     const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${this.selectedModel}:generateContent?key=${encodeURIComponent(this.apiKey)}`;
@@ -473,8 +488,14 @@ Chỉ trả về trực tiếp mã HTML/Semantic sạch sẽ của phần nội 
         parts: [{ text: systemInstruction }]
       },
       generationConfig: {
-        temperature: 0.2
-      }
+        temperature: 0.1
+      },
+      safetySettings: [
+        { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
+        { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
+        { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
+        { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' }
+      ]
     };
 
     const response = await fetch(endpoint, {
@@ -486,26 +507,45 @@ Chỉ trả về trực tiếp mã HTML/Semantic sạch sẽ của phần nội 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
       const msg = errorData.error?.message || `HTTP ${response.status} ${response.statusText}`;
-      throw new Error(msg);
+      throw new Error(`Google API (HTTP ${response.status}): ${msg}`);
     }
 
     const data = await response.json();
     let text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
     
+    if (!text) {
+      const finishReason = data?.candidates?.[0]?.finishReason;
+      const blockReason = data?.promptFeedback?.blockReason;
+      if (blockReason) {
+        throw new Error(`Bị Google AI chặn (Lý do: ${blockReason})`);
+      }
+      if (finishReason && finishReason !== 'STOP') {
+        throw new Error(`AI kết thúc bất thường: ${finishReason}`);
+      }
+      throw new Error('Google AI không phản hồi nội dung văn bản cho trang này.');
+    }
+
     // Clean markdown code fence if present
-    text = text.replace(/^```html\s*/i, '').replace(/\s*```$/i, '').trim();
+    text = text.replace(/^```(?:html|markdown|xml)?\s*/i, '').replace(/\s*```$/i, '').trim();
     chunk.translatedHtml = text;
   }
 
   async extractPdfChunkBase64(startPage, endPage) {
-    const srcDoc = await PDFLib.PDFDocument.load(this.pdfArrayBuffer);
+    // CRITICAL: Fresh read from File to ensure buffer is never detached
+    const freshArrayBuffer = await this.currentFile.arrayBuffer();
+    const srcDoc = await PDFLib.PDFDocument.load(freshArrayBuffer);
     const subDoc = await PDFLib.PDFDocument.create();
 
+    const pageCount = srcDoc.getPageCount();
     const pageIndices = [];
     for (let p = startPage; p <= endPage; p++) {
-      if (p <= srcDoc.getPageCount()) {
+      if (p <= pageCount) {
         pageIndices.push(p - 1);
       }
+    }
+
+    if (pageIndices.length === 0) {
+      throw new Error(`Không tìm thấy trang từ ${startPage} đến ${endPage}`);
     }
 
     const copiedPages = await subDoc.copyPages(srcDoc, pageIndices);
@@ -517,11 +557,48 @@ Chỉ trả về trực tiếp mã HTML/Semantic sạch sẽ của phần nội 
 
   bytesToBase64(bytes) {
     let binary = '';
-    const len = bytes.byteLength;
-    for (let i = 0; i < len; i++) {
-      binary += String.fromCharCode(bytes[i]);
+    const chunkSize = 8192;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      const chunk = bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
+      binary += String.fromCharCode.apply(null, chunk);
     }
     return window.btoa(binary);
+  }
+
+  async testApiKeyConnection() {
+    const key = this.apiKeyInput.value.trim();
+    if (!key) {
+      this.showToast('Vui lòng nhập API Key để kiểm tra!', 'warning');
+      return;
+    }
+
+    this.testApiKeyBtn.disabled = true;
+    this.testApiKeyBtn.textContent = 'Đang kiểm tra...';
+
+    try {
+      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${encodeURIComponent(key)}`;
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: 'Trả lời đúng 1 chữ: OK' }] }]
+        })
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error?.message || `HTTP ${res.status}`);
+      }
+
+      this.showToast('✅ Kết nối Google Gemini API thành công! API Key hợp lệ.', 'success');
+      this.apiKeyStatusDot.classList.add('connected');
+    } catch (err) {
+      this.showToast(`❌ API Key không hợp lệ: ${err.message}`, 'error');
+      this.apiKeyStatusDot.classList.remove('connected');
+    } finally {
+      this.testApiKeyBtn.disabled = false;
+      this.testApiKeyBtn.textContent = 'Kiểm tra kết nối';
+    }
   }
 
   renderChunkOutput(chunk) {
@@ -644,7 +721,7 @@ Chỉ trả về trực tiếp mã HTML/Semantic sạch sẽ của phần nội 
       this.showToast('Đang tạo file Word (.docx)...', 'info');
       const title = this.currentFile ? this.currentFile.name.replace(/\.[^/.]+$/, "") : "Bản_dịch_sách";
       
-      const { Document, Packer, Paragraph, TextRun, HeadingLevel } = docx;
+      const { Document, Packer, Paragraph, HeadingLevel } = docx;
 
       const docChildren = [
         new Paragraph({
@@ -654,7 +731,6 @@ Chỉ trả về trực tiếp mã HTML/Semantic sạch sẽ của phần nội 
         new Paragraph({ text: "" })
       ];
 
-      // Parse each chunk's inner text & headings
       this.chunks.forEach(c => {
         if (c.status === 'completed') {
           docChildren.push(
@@ -664,7 +740,6 @@ Chỉ trả về trực tiếp mã HTML/Semantic sạch sẽ của phần nội 
             })
           );
 
-          // Convert HTML to simple paragraphs
           const tempDiv = document.createElement('div');
           tempDiv.innerHTML = c.translatedHtml;
 
@@ -744,7 +819,7 @@ Chỉ trả về trực tiếp mã HTML/Semantic sạch sẽ của phần nội 
 
   initPaneResizer() {
     let isDragging = false;
-    this.paneResizer.addEventListener('mousedown', (e) => {
+    this.paneResizer.addEventListener('mousedown', () => {
       isDragging = true;
       this.paneResizer.classList.add('dragging');
       document.body.style.cursor = 'col-resize';
@@ -816,7 +891,6 @@ Chỉ trả về trực tiếp mã HTML/Semantic sạch sẽ của phần nội 
     if (confirm('Bạn có chắc muốn đóng tài liệu hiện tại và chọn tài liệu khác không?')) {
       this.currentFile = null;
       this.pdfDoc = null;
-      this.pdfArrayBuffer = null;
       this.chunks = [];
       this.isTranslating = false;
       this.isPaused = false;
@@ -884,7 +958,7 @@ Chỉ trả về trực tiếp mã HTML/Semantic sạch sẽ của phần nội 
       toast.style.transform = 'translateX(30px)';
       toast.style.transition = 'all 0.3s ease';
       setTimeout(() => toast.remove(), 300);
-    }, 4000);
+    }, 4500);
   }
 }
 
