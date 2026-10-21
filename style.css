@@ -1882,34 +1882,19 @@ textarea:focus {
     margin: 0.8rem 0 !important;
   }
 
-  /* References Section - Clean Robust Single Column to prevent Chrome overlap bug */
-  .references-section {
-    margin: 1.5rem 0 1rem 0 !important;
-    padding-top: 0.8rem !important;
-    border-top: 1px solid #cbd5e1 !important;
-  }
-
-  .references-section h2,
-  .references-section h3 {
-    font-size: 1.1rem !important;
-    margin-bottom: 0.6rem !important;
-  }
-
+  /* References Section */
+  .references-section,
   .references-list,
   ol.references {
-    font-size: 8pt !important;
-    line-height: 1.35 !important;
-    padding-left: 1.5rem !important;
-    margin: 0.4rem 0 !important;
-    column-count: 1 !important;
+    font-size: 7.5pt !important;
+    line-height: 1.25 !important;
+    column-count: 2 !important;
+    column-gap: 1.2rem !important;
   }
 
   .references-list li,
   .reference-item {
-    margin-bottom: 3px !important;
-    text-align: left !important;
-    word-break: break-word !important;
-    page-break-inside: avoid !important;
+    margin-bottom: 2px !important;
     break-inside: avoid !important;
   }
 }
