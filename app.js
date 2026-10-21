@@ -192,24 +192,56 @@ class LayoutTransApp {
       this.showToast(this.syncScroll ? 'Đã bật cuộn đồng bộ' : 'Đã tắt cuộn đồng bộ', 'info');
     });
 
-    // Synced Scrolling Implementation
-    let isSyncingLeft = false;
-    let isSyncingRight = false;
+    // Synced Scrolling Implementation (Direction-aware to prevent scroll locks)
+    let isUserScrollingLeft = false;
+    let isUserScrollingRight = false;
+    let syncTimeout = null;
+
+    this.pdfViewerScrollContainer.addEventListener('wheel', () => {
+      isUserScrollingLeft = true;
+      isUserScrollingRight = false;
+    }, { passive: true });
+
+    this.pdfViewerScrollContainer.addEventListener('touchstart', () => {
+      isUserScrollingLeft = true;
+      isUserScrollingRight = false;
+    }, { passive: true });
+
+    this.translatedScrollContainer.addEventListener('wheel', () => {
+      isUserScrollingRight = true;
+      isUserScrollingLeft = false;
+    }, { passive: true });
+
+    this.translatedScrollContainer.addEventListener('touchstart', () => {
+      isUserScrollingRight = true;
+      isUserScrollingLeft = false;
+    }, { passive: true });
+
     this.pdfViewerScrollContainer.addEventListener('scroll', () => {
-      if (!this.syncScroll || isSyncingLeft) return;
-      isSyncingRight = true;
-      const pct = this.pdfViewerScrollContainer.scrollTop / (this.pdfViewerScrollContainer.scrollHeight - this.pdfViewerScrollContainer.clientHeight || 1);
-      this.translatedScrollContainer.scrollTop = pct * (this.translatedScrollContainer.scrollHeight - this.translatedScrollContainer.clientHeight);
-      setTimeout(() => { isSyncingRight = false; }, 50);
-    });
+      if (!this.syncScroll || isUserScrollingRight) return;
+      const maxLeft = this.pdfViewerScrollContainer.scrollHeight - this.pdfViewerScrollContainer.clientHeight;
+      if (maxLeft <= 0) return;
+      const pct = this.pdfViewerScrollContainer.scrollTop / maxLeft;
+      const maxRight = this.translatedScrollContainer.scrollHeight - this.translatedScrollContainer.clientHeight;
+      if (maxRight > 0) {
+        this.translatedScrollContainer.scrollTop = pct * maxRight;
+      }
+      clearTimeout(syncTimeout);
+      syncTimeout = setTimeout(() => { isUserScrollingLeft = false; }, 120);
+    }, { passive: true });
 
     this.translatedScrollContainer.addEventListener('scroll', () => {
-      if (!this.syncScroll || isSyncingRight) return;
-      isSyncingLeft = true;
-      const pct = this.translatedScrollContainer.scrollTop / (this.translatedScrollContainer.scrollHeight - this.translatedScrollContainer.clientHeight || 1);
-      this.pdfViewerScrollContainer.scrollTop = pct * (this.pdfViewerScrollContainer.scrollHeight - this.pdfViewerScrollContainer.clientHeight);
-      setTimeout(() => { isSyncingLeft = false; }, 50);
-    });
+      if (!this.syncScroll || isUserScrollingLeft) return;
+      const maxRight = this.translatedScrollContainer.scrollHeight - this.translatedScrollContainer.clientHeight;
+      if (maxRight <= 0) return;
+      const pct = this.translatedScrollContainer.scrollTop / maxRight;
+      const maxLeft = this.pdfViewerScrollContainer.scrollHeight - this.pdfViewerScrollContainer.clientHeight;
+      if (maxLeft > 0) {
+        this.pdfViewerScrollContainer.scrollTop = pct * maxLeft;
+      }
+      clearTimeout(syncTimeout);
+      syncTimeout = setTimeout(() => { isUserScrollingRight = false; }, 120);
+    }, { passive: true });
 
     // Zoom Controls
     this.pdfZoomIn.addEventListener('click', () => this.changeZoom(0.15));
@@ -235,7 +267,13 @@ class LayoutTransApp {
     });
     this.exportHtmlBtn.addEventListener('click', (e) => { e.preventDefault(); this.exportHtml(); });
     this.exportDocxBtn.addEventListener('click', (e) => { e.preventDefault(); this.exportDocx(); });
-    this.exportPdfBtn.addEventListener('click', (e) => { e.preventDefault(); window.print(); });
+    this.exportPdfBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const origTitle = document.title;
+      document.title = this.getExportBaseName();
+      window.print();
+      setTimeout(() => { document.title = origTitle; }, 1200);
+    });
 
     // Resizer divider between panes
     this.initPaneResizer();
@@ -509,12 +547,21 @@ class LayoutTransApp {
 
       this.progressText.textContent = `Google AI đang bắt đầu dịch trang ${chunk.startPage} - ${chunk.endPage}...`;
 
-      // 2. Build Specialized Layout-Preserving Translation System Instruction
-      const systemInstruction = `Bạn là chuyên gia dịch thuật và chế bản tài liệu/sách học thuật chuyên nghiệp.
+      // 2. Build Specialized Academic Layout-Preserving Translation System Instruction
+      const systemInstruction = `Bạn là chuyên gia dịch thuật và chế bản tài liệu/sách học thuật chuyên nghiệp (Nature, Science, arXiv).
 Nhiệm vụ của bạn là đọc các trang PDF gốc đính kèm và:
 1. DỊCH TOÀN BỘ NỘI DUNG SANG TIẾNG VIỆT tự nhiên, chuẩn mực văn phong học thuật cao cấp.
-2. BẢO TOÀN CHÍNH XÁC 100% CẤU TRÚC VÀ BỐ CỤC DÀN TRANG GỐC:
-   - TIÊU ĐỀ: Giữ đúng cấp bậc H1 (Tên chương/phần lớn), H2 (Đề mục mục lớn), H3 (Tiểu mục con).
+2. BẢO TOÀN CHÍNH XÁC CẤU TRÚC VÀ BỐ CỤC DÀN TRANG GỐC:
+   - TIÊU ĐỀ: Giữ đúng cấp bậc H1 (Tên chương/phần lớn/tiêu đề bài báo), H2 (Đề mục mục lớn), H3 (Tiểu mục con).
+   - TÁC GIẢ & CƠ QUAN CÔNG TÁC (AUTHORS & AFFILIATIONS):
+     * TUYỆT ĐỐI KHÔNG dùng thẻ <table> kẻ khung viền ô vuông xám cho danh sách tác giả.
+     * Hãy dùng cấu trúc:
+       <div class="authors-block">
+         <div class="author-row">
+           <span class="author-name">[Tên tác giả]</span>
+           <span class="author-affil">[Tổ chức / Viện / Trường đại học dịch sang tiếng Việt]</span>
+         </div>
+       </div>
    - CHIA 2 CỘT: Nếu trang gốc có đoạn chia 2 cột, hãy dùng thẻ:
      <div class="layout-2col">
        <div>[Nội dung cột 1 tiếng Việt]</div>
@@ -525,12 +572,30 @@ Nhiệm vụ của bạn là đọc các trang PDF gốc đính kèm và:
        <div class="callout-title">Ghi chú / Định nghĩa / Lưu ý</div>
        <p>[Nội dung dịch]</p>
      </div>
-   - BẢNG BIỂU: Dùng thẻ <table>...</table> với header <th> và các dòng <td> được dịch đầy đủ.
+   - BẢNG BIỂU DỮ LIỆU: Chỉ dùng thẻ <table> khi tài liệu gốc thực sự là bảng dữ liệu, bảng số liệu. Dùng header <th> và các dòng <td> được dịch đầy đủ.
    - CÔNG THỨC TOÁN HỌC: BẢO TOÀN NGUYÊN VẸN các công thức toán/lý hóa bằng chuẩn LaTeX:
      * Công thức trong dòng: dùng $kí_hiệu$
      * Công thức riêng một dòng: dùng $$công_thức$$
-   - HÌNH ẢNH & CHÚ THÍCH: Đặt trong <div class="figure-wrapper"><div class="figure-caption">Hình X: [Chú thích dịch]</div></div>
-   - ĐOẠN VĂN: Căn đều, ngắt đoạn tự nhiên, giữ các liên kết hoặc ghi chú chân trang nếu có.
+   - HÌNH ẢNH, SƠ ĐỒ, ĐỒ THỊ (FIGURES & DIAGRAMS):
+     * TUYỆT ĐỐI KHÔNG tự tiện dùng thẻ HTML <div>, biểu tượng emoji (🏛️, 👥...) hay kẻ bảng <table> để vẽ lại sơ đồ của tác giả! Vẽ lại sẽ làm sai lệch thiết kế, tỷ lệ và đồ họa gốc của tác giả.
+     * Khi gặp một Hình vẽ, Sơ đồ hoặc Đồ thị (Figure X):
+       1. Xác định số trang PDF gốc chứa hình (ví dụ: data-page="${chunk.startPage}") và ước lượng tọa độ hộp chữ nhật (bounding box) của hình trên trang đó: data-bbox="[ymin, xmin, ymax, xmax]" (chuẩn hóa từ 0 đến 1000, trong đó ymin/xmin là góc trên-trái, ymax/xmax là góc dưới-phải của hình).
+       2. Dịch TRỌN VẸN toàn bộ chú thích (caption) của hình sang tiếng Việt.
+       3. Dịch tất cả các nhãn, khối văn bản và mũi tên xuất hiện bên trong sơ đồ sang tiếng Việt thành một danh sách chú giải rõ ràng.
+       4. Cấu trúc HTML bắt buộc cho hình vẽ:
+          <figure class="paper-figure" data-page="[SỐ_TRANG]" data-bbox="[ymin, xmin, ymax, xmax]" data-fignum="[SỐ_HÌNH]">
+            <div class="figure-image-slot"></div>
+            <figcaption><strong>Hình [X].</strong> [Bản dịch tiếng Việt chuẩn xác của toàn bộ chú thích hình]</figcaption>
+            <div class="figure-labels-panel">
+              <div class="figure-labels-title">Chú giải các nhãn & thuật ngữ trong sơ đồ gốc:</div>
+              <ul class="figure-labels-list">
+                <li><strong>[Từ/Cụm từ tiếng Anh trong hình]:</strong> [Nghĩa dịch tiếng Việt]</li>
+              </ul>
+            </div>
+          </figure>
+3. LOẠI BỎ HOÀN TOÀN HEADER & FOOTER LẶP CỦA TỪNG TRANG:
+   - Các dòng tiêu đề lặp ở đầu trang (Running header) và chân trang (Running footer) như: Tên bài báo lặp lại, tên tác giả lặp lại, số trang (ví dụ "trang 5 / 14", "Page 5 of 14"), đường kẻ phân cách đầu/chân trang: TUYỆT ĐỐI KHÔNG DỊCH VÀ KHÔNG ĐƯA VÀO BẢN DỊCH.
+   - NỐI LIỀN MẠCH MẠCH VĂN GIỮA CÁC TRANG: Khi trang trước kết thúc ở giữa một câu hoặc đoạn văn dở dang (ví dụ: "...các tác tử AI có thể" [hết trang]), hãy NỐI TIẾP NGAY vào câu ở đầu trang sau (ví dụ: "như chế tạo từng nguyên tử...") để tạo thành một đoạn văn duy nhất liền mạch. Tuyệt đối không chèn tiêu đề trang, số trang hay ngắt ngang văn bản.
 ${this.customPrompt ? `\nYÊU CẦU BỔ SUNG CỦA NGƯỜI DÙNG: ${this.customPrompt}` : ''}
 
 Chỉ trả về trực tiếp mã HTML sạch sẽ của phần nội dung dịch (không bọc trong thẻ \`\`\`html hay giải thích thừa).`;
@@ -678,6 +743,9 @@ Chỉ trả về trực tiếp mã HTML sạch sẽ của phần nội dung dị
           throwOnError: false
         });
       }
+
+      // Automatically crop and embed original author figures from PDF.js canvas
+      this.attachOriginalFigures(chunkBlock);
 
     } catch (err) {
       if (chunkTimerInterval) clearInterval(chunkTimerInterval);
@@ -835,6 +903,110 @@ Chỉ trả về trực tiếp mã HTML sạch sẽ của phần nội dung dị
         throwOnError: false
       });
     }
+
+    this.attachOriginalFigures(chunkBlock);
+  }
+
+  attachOriginalFigures(container) {
+    if (!container) return;
+    const figures = container.querySelectorAll('.paper-figure, .book-figure, figure[data-page]');
+    figures.forEach(fig => {
+      let pageNum = parseInt(fig.dataset.page, 10);
+      if (isNaN(pageNum)) {
+        const chunkBlock = fig.closest('.book-chunk-block');
+        if (chunkBlock && chunkBlock.id) {
+          const chunkId = parseInt(chunkBlock.id.replace('chunk-block-', ''), 10);
+          const chunkObj = this.chunks.find(c => c.id === chunkId);
+          if (chunkObj) pageNum = chunkObj.startPage;
+        }
+      }
+
+      const slot = fig.querySelector('.figure-image-slot') || fig.querySelector('.figure-image-container');
+      if (!slot) return;
+      if (slot.querySelector('img.original-cropped-figure')) return; // Already attached
+
+      const pageWrapper = document.getElementById(`pdf-page-${pageNum}`);
+      if (!pageWrapper) {
+        slot.innerHTML = `
+          <div class="figure-orig-tag">
+            <span>📷 Sơ đồ gốc nằm tại <strong>Trang ${pageNum}</strong> của bản PDF</span>
+          </div>`;
+        return;
+      }
+
+      const canvas = pageWrapper.querySelector('canvas');
+      if (!canvas) {
+        slot.innerHTML = `
+          <div class="figure-orig-tag">
+            <span>📷 Sơ đồ gốc nằm tại <strong>Trang ${pageNum}</strong> của bản PDF</span>
+          </div>`;
+        return;
+      }
+
+      try {
+        let bbox = [0, 0, 1000, 1000];
+        const bboxStr = fig.dataset.bbox;
+        if (bboxStr) {
+          try {
+            const parsed = JSON.parse(bboxStr);
+            if (Array.isArray(parsed) && parsed.length === 4) {
+              bbox = parsed;
+            }
+          } catch(e) {}
+        }
+
+        const [ymin, xmin, ymax, xmax] = bbox;
+        let cropX, cropY, cropW, cropH;
+        if (ymax > ymin + 30 && xmax > xmin + 30) {
+          cropX = Math.max(0, Math.floor((xmin / 1000) * canvas.width));
+          cropY = Math.max(0, Math.floor((ymin / 1000) * canvas.height));
+          cropW = Math.min(canvas.width - cropX, Math.floor(((xmax - xmin) / 1000) * canvas.width));
+          cropH = Math.min(canvas.height - cropY, Math.floor(((ymax - ymin) / 1000) * canvas.height));
+        } else {
+          // If bbox is missing, crop middle 70% of page
+          cropX = 0;
+          cropY = Math.floor(canvas.height * 0.15);
+          cropW = canvas.width;
+          cropH = Math.floor(canvas.height * 0.7);
+        }
+
+        const cropCanvas = document.createElement('canvas');
+        cropCanvas.width = cropW;
+        cropCanvas.height = cropH;
+        const ctx = cropCanvas.getContext('2d');
+        ctx.drawImage(canvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+
+        const dataUrl = cropCanvas.toDataURL('image/png');
+        slot.innerHTML = `
+          <div class="cropped-figure-wrapper">
+            <img src="${dataUrl}" class="original-cropped-figure" alt="Hình gốc từ trang ${pageNum}" />
+            <button class="figure-zoom-btn" type="button">
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              <span>Đối chiếu Trang ${pageNum}</span>
+            </button>
+          </div>
+        `;
+
+        const zoomBtn = slot.querySelector('.figure-zoom-btn');
+        if (zoomBtn) {
+          zoomBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            pageWrapper.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            pageWrapper.classList.add('highlight-pulse');
+            setTimeout(() => pageWrapper.classList.remove('highlight-pulse'), 1800);
+          });
+        }
+      } catch (err) {
+        console.warn('Lỗi cắt hình từ canvas:', err);
+      }
+    });
+  }
+
+  getExportBaseName() {
+    if (!this.currentFile) return 'LTA_Tai_lieu_dich';
+    const rawName = this.currentFile.name.replace(/\.[^/.]+$/, "");
+    return `LTA_${rawName}`;
   }
 
   updateProgressUI() {
@@ -856,16 +1028,20 @@ Chỉ trả về trực tiếp mã HTML sạch sẽ của phần nội dung dị
       return;
     }
 
-    const title = this.currentFile ? this.currentFile.name.replace(/\.[^/.]+$/, "") : "Bản_dịch_sách";
+    const title = this.getExportBaseName();
     
-    // Assemble all chunks
+    // Assemble all chunks with embedded cropped author figures
     let allContent = '';
     this.chunks.forEach(c => {
       if (c.status === 'completed') {
+        const chunkBlock = document.getElementById(`chunk-block-${c.id}`);
+        const htmlToExport = chunkBlock 
+          ? chunkBlock.querySelector('.chunk-inner-content').innerHTML 
+          : c.translatedHtml;
         allContent += `
         <section class="book-section" id="page-section-${c.startPage}">
           <div class="page-meta-tag">Trang ${c.startPage} – ${c.endPage}</div>
-          ${c.translatedHtml}
+          ${htmlToExport}
         </section>`;
       }
     });
@@ -895,14 +1071,27 @@ Chỉ trả về trực tiếp mã HTML sạch sẽ của phần nội dung dị
     h2 { font-size: 1.5rem; color: #0f172a; margin: 1.5rem 0 0.8rem; border-bottom: 2px solid #e2e8f0; padding-bottom: 0.4rem; }
     h3 { font-size: 1.25rem; color: #0f172a; margin: 1.2rem 0 0.6rem; }
     p { margin-bottom: 1.2rem; text-align: justify; }
+    .authors-block { margin: 1.5rem 0 2rem; padding: 0.5rem 0; display: flex; flex-direction: column; gap: 0.45rem; }
+    .author-row { display: flex; justify-content: flex-start; align-items: baseline; gap: 2rem; padding: 3px 0; font-size: 0.94rem; }
+    .author-name { font-weight: 700; color: #0f172a; min-width: 200px; flex-shrink: 0; }
+    .author-affil { color: #64748b; font-size: 0.9rem; }
     .layout-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; margin: 1.5rem 0; }
-    @media (max-width: 768px) { .layout-2col { grid-template-columns: 1fr; } }
+    @media (max-width: 768px) { .layout-2col { grid-template-columns: 1fr; } .author-row { flex-direction: column; gap: 0.2rem; } }
     .callout { background: #f8fafc; border-left: 4px solid #6366f1; padding: 1.2rem; border-radius: 8px; margin: 1.5rem 0; }
     .callout-title { font-weight: 700; margin-bottom: 0.5rem; color: #4338ca; }
-    table { width: 100%; border-collapse: collapse; margin: 1.5rem 0; background: #fff; }
-    th { background: #f1f5f9; padding: 10px; text-align: left; border: 1px solid #cbd5e1; }
-    td { padding: 9px; border: 1px solid #e2e8f0; }
+    table { width: 100%; border-collapse: collapse; margin: 2rem 0; border-top: 2px solid #0f172a; border-bottom: 2px solid #0f172a; }
+    th { padding: 10px 14px; text-align: left; font-weight: 700; border-bottom: 1.5px solid #0f172a; }
+    td { padding: 9px 14px; border-bottom: 1px solid #e2e8f0; }
     .page-meta-tag { font-size: 0.75rem; color: #94a3b8; border-bottom: 1px dashed #cbd5e1; padding-bottom: 4px; margin-bottom: 1.5rem; }
+    .paper-figure, .figure-wrapper { margin: 2rem 0; background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 1.25rem; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+    .figure-image-slot { width: 100%; display: flex; justify-content: center; margin-bottom: 1rem; }
+    .original-cropped-figure { max-width: 100%; height: auto; border-radius: 4px; }
+    .figure-zoom-btn { display: none; }
+    figcaption, .figure-caption { font-size: 0.88rem; color: #334155; line-height: 1.6; text-align: justify; margin: 0.8rem 0; }
+    .figure-labels-panel { margin-top: 1rem; padding-top: 0.8rem; border-top: 1px dashed #e2e8f0; font-size: 0.84rem; }
+    .figure-labels-title { font-weight: 700; color: #4f46e5; margin-bottom: 0.5rem; }
+    .figure-labels-list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 6px 14px; }
+    .figure-labels-list li { background: #f8fafc; padding: 4px 8px; border-radius: 4px; border-left: 2px solid #6366f1; font-size: 0.82rem; }
   </style>
 </head>
 <body>
@@ -910,8 +1099,8 @@ Chỉ trả về trực tiếp mã HTML sạch sẽ của phần nội dung dị
 </body>
 </html>`;
 
-    this.downloadFile(fullHtml, `${title}_tieng_viet.html`, 'text/html');
-    this.showToast('Đã xuất file Web HTML thành công!', 'success');
+    this.downloadFile(fullHtml, `${title}.html`, 'text/html');
+    this.showToast(`Đã xuất file Web HTML: ${title}.html`, 'success');
   }
 
   async exportDocx() {
@@ -922,7 +1111,7 @@ Chỉ trả về trực tiếp mã HTML sạch sẽ của phần nội dung dị
 
     try {
       this.showToast('Đang tạo file Word (.docx)...', 'info');
-      const title = this.currentFile ? this.currentFile.name.replace(/\.[^/.]+$/, "") : "Bản_dịch_sách";
+      const title = this.getExportBaseName();
       
       const { Document, Packer, Paragraph, HeadingLevel } = docx;
 
@@ -973,11 +1162,11 @@ Chỉ trả về trực tiếp mã HTML sạch sẽ của phần nội dung dị
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${title}_tieng_viet.docx`;
+      a.download = `${title}.docx`;
       a.click();
       URL.revokeObjectURL(url);
 
-      this.showToast('Đã xuất file Word (.docx) thành công!', 'success');
+      this.showToast(`Đã xuất file Word: ${title}.docx`, 'success');
     } catch (err) {
       console.error('Lỗi xuất DOCX:', err);
       this.showToast(`Lỗi tạo file Word: ${err.message}`, 'error');
