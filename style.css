@@ -1478,6 +1478,11 @@ textarea:focus {
     display: none !important;
   }
 
+  @page {
+    size: A4;
+    margin: 1.8cm 1.5cm;
+  }
+
   .workspace,
   .dual-pane-container,
   .pane-translated,
@@ -1490,26 +1495,58 @@ textarea:focus {
 
   .translated-book-document {
     max-width: 100% !important;
-    font-size: 11pt !important;
-    line-height: 1.5 !important;
+    font-size: 10.5pt !important;
+    line-height: 1.55 !important;
+    color: #111111 !important;
   }
 
   .book-chunk-block {
-    page-break-after: always;
+    margin-bottom: 1.5rem !important;
+    padding-bottom: 0 !important;
     border-bottom: none !important;
+    page-break-after: auto !important;
   }
 
   .chunk-header-pill {
     display: none !important;
   }
 
-  .callout, .note-box {
-    border: 1px solid #ccc !important;
-    background: #fafafa !important;
-    page-break-inside: avoid;
+  h1 {
+    font-size: 1.6rem !important;
+    margin: 1.2rem 0 0.8rem 0 !important;
+    page-break-after: avoid !important;
+    break-after: avoid !important;
   }
 
+  h2, h3 {
+    page-break-after: avoid !important;
+    break-after: avoid !important;
+  }
+
+  .authors-block {
+    margin: 1rem 0 1.5rem 0 !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+
+  .author-row {
+    padding: 1px 0 !important;
+    font-size: 9.5pt !important;
+  }
+
+  .paper-figure,
+  .figure-wrapper,
+  .callout,
+  .note-box,
   table {
-    page-break-inside: avoid;
+    border: 1px solid #e2e8f0 !important;
+    background: #ffffff !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+    margin: 1.5rem 0 !important;
+  }
+
+  .figure-zoom-btn {
+    display: none !important;
   }
 }

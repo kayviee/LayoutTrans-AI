@@ -19,12 +19,7 @@ class LayoutTransApp {
     }
 
     let savedChunkSize = localStorage.getItem('layouttrans_chunk_size');
-    if (!savedChunkSize || savedChunkSize === '4') {
-      this.chunkSize = 2;
-      localStorage.setItem('layouttrans_chunk_size', '2');
-    } else {
-      this.chunkSize = parseInt(savedChunkSize, 10);
-    }
+    this.chunkSize = savedChunkSize ? parseInt(savedChunkSize, 10) : 4;
     this.customPrompt = localStorage.getItem('layouttrans_custom_prompt') || '';
     
     this.currentFile = null;
