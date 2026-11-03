@@ -1,13 +1,13 @@
 {
   "name": "layouttrans-ai",
-  "version": "1.0.0",
-  "description": "LayoutTrans AI - Academic Book Layout-Preserving Translator",
+  "version": "1.7.0",
+  "description": "LayoutTrans AI - Academic PDF bilingual translator with 100% paragraph coverage QA, 3x High-DPI figures with structured translation tables, and persistent user preferences",
   "scripts": {
     "dev": "npx -y serve -p 3000 .",
     "start": "npx -y serve -p 3000 .",
     "build": "echo 'Static web app ready'"
   },
-  "keywords": ["gemini", "ocr", "translation", "pdf", "layout-preservation"],
+  "keywords": ["gemini", "translation", "pdf", "bilingual-reader", "quality-assurance"],
   "author": "Kayvie Nguyen",
   "license": "MIT"
 }

@@ -1,55 +1,29 @@
-# LayoutTrans AI — Trình Dịch Thuật & Bảo Toàn Bố Cục Sách
+# LayoutTrans AI (v1.7.0)
 
-**LayoutTrans AI** là công cụ web chuyên dụng được thiết kế riêng cho việc chuyển ngữ tài liệu/sách học thuật sang tiếng Việt mà vẫn **giữ nguyên 100% bố cục dàn trang gốc** (bố cục 2 cột, bảng biểu, khung ghi chú callout, công thức toán LaTeX).
+LayoutTrans AI là trình đọc song ngữ và tạo bản dịch reflow chất lượng cao cho PDF học thuật & tài liệu chuyên ngành. Bản PDF gốc luôn được giữ ở khung đối chiếu; bản dịch được kiểm định độ phủ tới từng đoạn văn và chỉ cho xuất file khi mọi trang đều đạt chuẩn 100%.
 
----
+## Các nâng cấp trọng tâm (v1.7.0)
 
-## 🌟 Điểm nổi bật
+1. **Chấm dứt lỗi "dịch một nửa, còn lại giữ nguyên tiếng Anh"**:
+   - Mặc định gộp **2 trang/request** kèm `maxOutputTokens: 65536` để Gemini không bao giờ bị tràn bộ đệm đầu ra khi dịch các trang học thuật dày chữ.
+   - Gửi đồng thời cả **PDF gốc (Multimodal)** lẫn **toàn bộ lớp văn bản trích xuất của từng trang** làm danh sách đối chiếu bắt buộc (100% Checklist).
+   - Bộ kiểm định QA mới kiểm tra **từng đoạn văn (`<p>`, `<li>`, `<figcaption>`)** để phát hiện ngay bất kỳ đoạn văn tiếng Anh nào bị bỏ sót (`PARTIAL_UNTRANSLATED_ENGLISH`) và tự động yêu cầu dịch bù đúng trang đó.
+   - Có nút **`🔄 Dịch lại trang N`** ngay trên đầu mỗi trang để dịch lại độc lập bất kỳ trang nào chỉ với 1 cú nhấp chuột.
 
-1. **Siêu nhẹ máy (Zero Node Modules Bloat):**
-   - Không cần cài hàng trăm MB thư viện nặng nề.
-   - Sử dụng HTML5, CSS3 tinh tế và Vanilla JS hiện đại kết hợp CDN chất lượng cao.
-   - Dung lượng toàn bộ công cụ chỉ **dưới 100 KB**!
+2. **Hình ảnh & Biểu đồ sắc nét 3x High-DPI + Bảng dịch thành phần chuẩn mực dưới hình**:
+   - Loại bỏ hoàn toàn cơ chế đè các ô chữ nhỏ li ti, chồng chéo lên ảnh mờ.
+   - Mọi hình vẽ, sơ đồ, biểu đồ (`Figure`, `Chart`, `Diagram`) đều được cắt trực tiếp từ canvas **High-DPI 3.0x** siêu nét, giữ nguyên 100% đồ họa gốc không bị sạn.
+   - Ngay bên dưới mỗi hình là **Bảng dịch chi tiết các thành phần trong Hình / Biểu đồ** (`<table class="figure-translation-table">`) gồm 3 cột rõ ràng: **Vị trí / Thành phần** — **Thuật ngữ gốc** — **Bản dịch & Giải nghĩa tiếng Việt**.
+   - Bấm trực tiếp vào hình hoặc nút **Phóng to Hình & Bảng dịch** để mở chế độ **Lightbox độ phân giải cao** xem song song ảnh 3x và bảng dịch.
 
-2. **Kế thừa triết lý dàn trang cao cấp:**
-   - **Bố cục 2 cột hoặc 1 cột:** Tự động giữ nguyên cấu trúc trang như sách gốc.
-   - **Khung hộp ghi chú (Callout Boxes):** Giữ nguyên định dạng các khung Note, Tip, Warning, Definition thường gặp trong sách giáo trình.
-   - **Công thức toán học chuẩn KaTeX:** Tự động hiển thị công thức LaTeX rõ nét, chuẩn học thuật quốc tế.
-   - **Bảng biểu (Tables):** Dịch trọn vẹn nội dung bên trong và giữ nguyên cấu trúc hàng/cột.
+3. **Lưu trữ bền vững 100% cài đặt & Bộ nhớ đệm thông minh (`localStorage`)**:
+   - Tự động nhớ mọi tùy chỉnh của người dùng qua các lần mở lại trình duyệt: **Font chữ** (`Auto`, `Times New Roman`, `Merriweather`, `Lora`, `Georgia`, `Palatino`, `Charter`, `Be Vietnam Pro`, `Inter`, `Arial` hoặc Font tùy chọn), **Cỡ chữ (`px`)**, **Tỷ lệ thu phóng PDF (`%`)**, **Chế độ xem (`Song song` / `Chỉ bản dịch` / `Chỉ bản gốc`)**, **Độ rộng thanh kéo chia khung**, **Đồng bộ cuộn**, **Model Gemini**, **Số trang/lần gọi (1–6 trang)**, **Prompt tùy chỉnh**, **Giao diện Sáng/Tối** và **API Key**.
+   - Thanh công cụ bên phải có **menu chọn nhanh Font chữ** đổi tức thì trên giao diện đọc, bản in PDF, file HTML và file Word (`.docx`).
+   - **Tự động lưu bộ nhớ đệm (Cache) từng trang đã dịch theo từng file PDF**: khi tải lại trang hoặc mở lại đúng file PDF cũ, các trang đã dịch đạt chuẩn sẽ khôi phục ngay lập tức mà không tốn lại API token.
 
-3. **Chế độ xem linh hoạt (3 chế độ):**
-   - **Song song đối chiếu:** Trang gốc PDF bên trái, bản dịch tiếng Việt bên phải.
-   - **Cuộn đồng bộ (Synced Scrolling):** Cuộn bên này thì bên kia tự động trượt theo.
-   - **Chỉ bản dịch (Full Reading):** Xem toàn màn hình bản dịch dàn trang như một cuốn sách điện tử tiếng Việt.
-   - **Chỉ bản gốc:** Đối chiếu nhanh khi cần.
+## Cách chạy nhanh
 
-4. **Tùy chọn xuất file đa dạng:**
-   - **Xuất Web HTML:** Một file duy nhất đọc offline cực đẹp, giữ nguyên toàn bộ CSS và công thức toán.
-   - **Xuất Word (.docx):** Tạo file Word trực tiếp trên trình duyệt để biên tập thêm.
-   - **In / Lưu PDF:** Tích hợp bộ quy chuẩn in ấn chuyên nghiệp (Cmd + P) cho ra bản in PDF dàn trang chuẩn xuất bản.
-
-5. **Linh hoạt Model AI:**
-   - Hỗ trợ **Gemini 2.5 Flash** (siêu nhanh & tiết kiệm), **Gemini 1.5 Flash** và **Gemini 1.5 Pro** (dành cho sách học thuật sâu).
-   - Tùy chỉnh số trang mỗi chunk (mặc định 4 trang/chunk để AI không bị quá tải).
-
----
-
-## 🚀 Cách mở và sử dụng
-
-### Bước 1: Khởi động
-Mở **Terminal** và chạy lệnh:
 ```bash
-cd /Users/kayvienguyen/Downloads/A_Study/Book_Edit/tools/layout-translator
+cd /Users/kayvienguyen/Downloads/C_Tools/01_Local_Projects/Mini_Tools/layout-translator
 ./start.sh
 ```
-Trình duyệt sẽ tự động mở lên tại địa chỉ: `http://localhost:3333`
-
-### Bước 2: Thiết lập API Key
-- Bấm vào nút **"Cài đặt Key"** ở góc phải trên cùng.
-- Dán mã **Gemini API Key** lấy từ [Google AI Studio](https://aistudio.google.com/api-keys) (miễn phí hoặc tài khoản Pro của bạn).
-- Bấm **Lưu Cấu hình**.
-
-### Bước 3: Kéo thả sách và Dịch
-- Kéo thả file PDF vào ô trung tâm.
-- Bấm **"Bắt đầu dịch"**.
-- Theo dõi tiến độ trực tiếp trên màn hình đối chiếu song song!
