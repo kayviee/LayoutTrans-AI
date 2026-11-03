@@ -27,7 +27,7 @@
   <!-- Docx.js for exporting to Word -->
   <script src="https://cdn.jsdelivr.net/npm/docx@8.5.0/build/index.umd.js"></script>
 
-  <link rel="stylesheet" href="style.css?v=1.8.0">
+  <link rel="stylesheet" href="style.css?v=1.8.1">
 </head>
 <body>
   <!-- Header / Navigation Bar -->
@@ -91,41 +91,49 @@
           <span>Xuất file</span>
         </button>
         <div class="dropdown-content" id="exportDropdown">
-          <div class="dropdown-section-heading">Văn bản gốc trích từ PDF</div>
-          <a href="#" id="exportSourceMarkdownBtn">
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M8 13h2v5H8zM13 18v-5l2 3 2-3v5"/></svg>
+          <div class="dropdown-section-heading">Bản gốc trích từ PDF</div>
+          <a href="#" id="exportSourceDocxBtn">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><rect x="8" y="12" width="8" height="6" rx="1"/></svg>
             <div>
-              <strong>Xuất text gốc (.md)</strong>
-              <small>Đọc và chỉnh sửa; không cần QA bản dịch</small>
+              <strong>Xuất Bản gốc Word (.docx)</strong>
+              <small>Văn bản gốc + tự động chèn hình trong bài</small>
             </div>
           </a>
           <a href="#" id="exportSourceHtmlBtn">
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/><line x1="14" y1="4" x2="10" y2="20"/></svg>
             <div>
-              <strong>Xuất text gốc (.html)</strong>
-              <small>Mở trên trình duyệt, chia theo trang</small>
+              <strong>Xuất Bản gốc HTML (.html)</strong>
+              <small>Văn bản gốc + hình minh họa, mở trình duyệt</small>
+            </div>
+          </a>
+          <a href="#" id="exportSourceMarkdownBtn">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M8 13h2v5H8zM13 18v-5l2 3 2-3v5"/></svg>
+            <div>
+              <strong>Xuất text gốc (.md)</strong>
+              <small>Chỉ văn bản Markdown gọn nhẹ (không chèn hình)</small>
             </div>
           </a>
           <div class="dropdown-divider" role="separator"></div>
+          <div class="dropdown-section-heading">Bản dịch Tiếng Việt</div>
           <a href="#" id="exportHtmlBtn">
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
             <div>
               <strong>Xuất Web HTML</strong>
-              <small>Bản đọc reflow đã kiểm tra đủ trang</small>
+              <small>Bản đọc reflow kèm hình & bảng dịch</small>
             </div>
           </a>
           <a href="#" id="exportDocxBtn">
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M8 13h8"/><path d="M8 17h8"/></svg>
             <div>
               <strong>Xuất Word (.docx)</strong>
-              <small>Biên tập, chỉnh sửa trực tiếp</small>
+              <small>Bản dịch tiếng Việt kèm hình minh họa</small>
             </div>
           </a>
           <a href="#" id="exportPdfBtn">
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
             <div>
               <strong>In / Lưu PDF</strong>
-              <small>PDF reflow; số trang có thể khác bản gốc</small>
+              <small>PDF bản dịch chuẩn A4</small>
             </div>
           </a>
         </div>
@@ -553,6 +561,6 @@
   <div class="toast-container" id="toastContainer"></div>
 
   <!-- Application Logic -->
-  <script src="app.js?v=1.8.0"></script>
+  <script src="app.js?v=1.8.1"></script>
 </body>
 </html>

@@ -197,6 +197,7 @@ class LayoutTransApp {
     // Export Dropdown
     this.exportMenuBtn = document.getElementById('exportMenuBtn');
     this.exportDropdown = document.getElementById('exportDropdown');
+    this.exportSourceDocxBtn = document.getElementById('exportSourceDocxBtn');
     this.exportSourceMarkdownBtn = document.getElementById('exportSourceMarkdownBtn');
     this.exportSourceHtmlBtn = document.getElementById('exportSourceHtmlBtn');
     this.exportHtmlBtn = document.getElementById('exportHtmlBtn');
@@ -676,6 +677,9 @@ class LayoutTransApp {
     document.addEventListener('click', () => {
       document.querySelectorAll('.dropdown.open').forEach(el => el.classList.remove('open'));
     });
+    if (this.exportSourceDocxBtn) {
+      this.exportSourceDocxBtn.addEventListener('click', (e) => { e.preventDefault(); this.exportSourceText('docx'); });
+    }
     this.exportSourceMarkdownBtn.addEventListener('click', (e) => { e.preventDefault(); this.exportSourceText('markdown'); });
     this.exportSourceHtmlBtn.addEventListener('click', (e) => { e.preventDefault(); this.exportSourceText('html'); });
     this.exportHtmlBtn.addEventListener('click', (e) => { e.preventDefault(); this.exportHtml(); });
@@ -3697,6 +3701,404 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
 
   // ==================== Export Capabilities ====================
 
+  dataUrlToUint8Array(dataUrl) {
+    try {
+      const parts = String(dataUrl || '').split(',');
+      if (parts.length < 2) return null;
+      const binary = window.atob(parts[1]);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+      return bytes;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  getPngDimensions(bytes) {
+    if (!bytes || bytes.length < 24) return { width: 600, height: 360 };
+    // PNG IHDR chunk stores big-endian width at bytes 16..19 and height at bytes 20..23
+    const width = ((bytes[16] << 24) | (bytes[17] << 16) | (bytes[18] << 8) | bytes[19]) >>> 0;
+    const height = ((bytes[20] << 24) | (bytes[21] << 16) | (bytes[22] << 8) | bytes[23]) >>> 0;
+    if (width > 0 && width < 20000 && height > 0 && height < 20000) {
+      return { width, height };
+    }
+    return { width: 600, height: 360 };
+  }
+
+  detectVisualFigureBboxesOnCanvas(pageNum, sourceCanvas) {
+    if (!sourceCanvas) return [];
+    const profile = this.getSourcePageProfile(pageNum);
+    const items = Array.isArray(profile?.textItems) ? profile.textItems : [];
+
+    // 1. Check if page has a sideways rotated table/figure
+    const rotatedItems = items.filter(i => i.rotation === 90 || i.rotation === 270);
+    const rotatedChars = rotatedItems.reduce((sum, i) => sum + (i.text || '').length, 0);
+    const results = [];
+    if (rotatedItems.length >= 3 && rotatedChars >= 25) {
+      const refined = this.resolveFigureCropAndRotation(pageNum, [40, 40, 960, 960], 0);
+      if (refined?.autoRotated && Array.isArray(refined.bbox)) {
+        const capItem = items.find(i => /^(?:table|figure|fig\.?)\s*\d+/i.test(i.text || ''));
+        results.push({
+          bbox: refined.bbox,
+          rotation: refined.rotation || 90,
+          caption: capItem ? capItem.text : `Table / Figure (Page ${pageNum})`
+        });
+      }
+    }
+
+    // 2. Detect non-rotated visual figures/charts/diagrams by erasing normal horizontal prose on a low-res mask
+    try {
+      const maskW = 200;
+      const maskH = 280;
+      const maskCanvas = document.createElement('canvas');
+      maskCanvas.width = maskW;
+      maskCanvas.height = maskH;
+      const mCtx = maskCanvas.getContext('2d');
+      mCtx.fillStyle = '#ffffff';
+      mCtx.fillRect(0, 0, maskW, maskH);
+      mCtx.drawImage(sourceCanvas, 0, 0, maskW, maskH);
+
+      // Erase page margins (running headers/footers)
+      mCtx.fillStyle = '#ffffff';
+      mCtx.fillRect(0, 0, maskW, Math.round(maskH * 0.055));
+      mCtx.fillRect(0, Math.round(maskH * 0.94), maskW, Math.ceil(maskH * 0.06));
+      mCtx.fillRect(0, 0, Math.round(maskW * 0.045), maskH);
+      mCtx.fillRect(Math.round(maskW * 0.955), 0, Math.ceil(maskW * 0.05), maskH);
+
+      // Erase horizontal text items AND any already-detected rotated regions so only unrotated graphics/charts remain
+      items.forEach(item => {
+        const [y0, x0, y1, x1] = item.bbox || [];
+        if (!Number.isFinite(y0)) return;
+        const padX = 3;
+        const padY = 2;
+        const rx = Math.max(0, Math.floor((x0 / 1000) * maskW) - padX);
+        const ry = Math.max(0, Math.floor((y0 / 1000) * maskH) - padY);
+        const rw = Math.min(maskW - rx, Math.ceil(((x1 - x0) / 1000) * maskW) + padX * 2);
+        const rh = Math.min(maskH - ry, Math.ceil(((y1 - y0) / 1000) * maskH) + padY * 2);
+        mCtx.fillRect(rx, ry, rw, rh);
+      });
+      results.forEach(r => {
+        const [y0, x0, y1, x1] = r.bbox;
+        mCtx.fillRect(
+          Math.floor((x0 / 1000) * maskW) - 4,
+          Math.floor((y0 / 1000) * maskH) - 4,
+          Math.ceil(((x1 - x0) / 1000) * maskW) + 8,
+          Math.ceil(((y1 - y0) / 1000) * maskH) + 8
+        );
+      });
+
+      const imgData = mCtx.getImageData(0, 0, maskW, maskH).data;
+      const rowInk = new Int32Array(maskH);
+      for (let y = 0; y < maskH; y++) {
+        let count = 0;
+        for (let x = 0; x < maskW; x++) {
+          const idx = (y * maskW + x) * 4;
+          if (imgData[idx] < 236 || imgData[idx + 1] < 236 || imgData[idx + 2] < 236) {
+            count++;
+          }
+        }
+        rowInk[y] = count;
+      }
+
+      // Group active graphic rows into vertical bands (allowing small gaps up to 5 rows)
+      const bands = [];
+      let bandStart = -1;
+      let gapCount = 0;
+      for (let y = 0; y < maskH; y++) {
+        if (rowInk[y] >= 4) {
+          if (bandStart === -1) bandStart = y;
+          gapCount = 0;
+        } else if (bandStart !== -1) {
+          gapCount++;
+          if (gapCount > 6) {
+            bands.push([bandStart, y - gapCount]);
+            bandStart = -1;
+            gapCount = 0;
+          }
+        }
+      }
+      if (bandStart !== -1) bands.push([bandStart, maskH - 1]);
+
+      bands.forEach(([by0, by1]) => {
+        const bandH = by1 - by0 + 1;
+        if (bandH < Math.round(maskH * 0.08)) return; // must be at least 8% of page height
+        let bx0 = maskW;
+        let bx1 = 0;
+        let inkPixels = 0;
+        for (let y = by0; y <= by1; y++) {
+          for (let x = 0; x < maskW; x++) {
+            const idx = (y * maskW + x) * 4;
+            if (imgData[idx] < 236 || imgData[idx + 1] < 236 || imgData[idx + 2] < 236) {
+              if (x < bx0) bx0 = x;
+              if (x > bx1) bx1 = x;
+              inkPixels++;
+            }
+          }
+        }
+        const bandW = bx1 - bx0 + 1;
+        if (bandW < Math.round(maskW * 0.18)) return;
+        const area = bandW * bandH;
+        if (inkPixels < 55 || inkPixels / area < 0.015) return;
+
+        // Expand slightly in 0..1000 space to include figure labels/axes
+        const ymin = Math.max(35, Math.round((by0 / maskH) * 1000) - 18);
+        const xmin = Math.max(35, Math.round((bx0 / maskW) * 1000) - 18);
+        const ymax = Math.min(960, Math.round((by1 / maskH) * 1000) + 22);
+        const xmax = Math.min(965, Math.round((bx1 / maskW) * 1000) + 18);
+
+        const nearbyCaption = items.find(i => (
+          i.rotation === 0
+          && /^(?:fig(?:ure)?\.?|table|scheme)\s*\d+/i.test(i.text || '')
+          && i.bbox[0] >= ymin - 60
+          && i.bbox[2] <= ymax + 85
+        ));
+        results.push({
+          bbox: [ymin, xmin, ymax, xmax],
+          rotation: 0,
+          caption: nearbyCaption ? nearbyCaption.text : `Figure (Page ${pageNum})`
+        });
+      });
+    } catch (e) {
+      console.warn('Auto figure detection fallback:', e);
+    }
+
+    return results;
+  }
+
+  async extractSourcePageFigures(pageNum) {
+    const highResCanvas = await this.getHighResPageCanvas(pageNum, 2.5);
+    const pageWrapper = document.getElementById(`pdf-page-${pageNum}`);
+    const previewCanvas = pageWrapper ? pageWrapper.querySelector('canvas') : null;
+    const sourceCanvas = highResCanvas || previewCanvas;
+    if (!sourceCanvas) return [];
+
+    const figureSpecs = [];
+    const seenKeys = new Set();
+    const addSpec = (bbox, rotation, caption) => {
+      if (!Array.isArray(bbox) || bbox.length !== 4) return;
+      const refined = this.resolveFigureCropAndRotation(pageNum, bbox, rotation || 0);
+      const finalBbox = refined.bbox || bbox;
+      const finalRot = refined.rotation || rotation || 0;
+      const key = `${Math.round(finalBbox[0] / 25)}_${Math.round(finalBbox[1] / 25)}_${Math.round(finalBbox[2] / 25)}_${Math.round(finalBbox[3] / 25)}_${finalRot}`;
+      if (seenKeys.has(key)) return;
+      seenKeys.add(key);
+      figureSpecs.push({ bbox: finalBbox, rotation: finalRot, caption: caption || '' });
+    };
+
+    // 1. Check translated/cached <figure> elements for this page
+    const domFigures = [
+      ...this.translatedContent.querySelectorAll(`figure[data-page="${pageNum}"][data-bbox], section.source-page[data-source-page="${pageNum}"] figure[data-bbox]`)
+    ];
+    domFigures.forEach(fig => {
+      try {
+        const parsed = JSON.parse(fig.getAttribute('data-bbox') || 'null');
+        const rot = parseInt(fig.getAttribute('data-rotate') || '0', 10) || 0;
+        const cap = (fig.querySelector('figcaption')?.textContent || '').replace(/\s+/g, ' ').trim();
+        addSpec(parsed, rot, cap);
+      } catch (e) {}
+    });
+
+    if (figureSpecs.length === 0) {
+      this.chunks.forEach(c => {
+        (c.pageResults || []).forEach(pr => {
+          if (pr.pageNum !== pageNum || !pr.html) return;
+          const tpl = document.createElement('template');
+          tpl.innerHTML = pr.html;
+          tpl.content.querySelectorAll('figure[data-bbox]').forEach(fig => {
+            try {
+              const parsed = JSON.parse(fig.getAttribute('data-bbox') || 'null');
+              const rot = parseInt(fig.getAttribute('data-rotate') || '0', 10) || 0;
+              const cap = (fig.querySelector('figcaption')?.textContent || '').replace(/\s+/g, ' ').trim();
+              addSpec(parsed, rot, cap);
+            } catch (e) {}
+          });
+        });
+      });
+    }
+
+    // 2. If no translated figures exist yet for this page, run automatic visual & rotated-table detection on the PDF page
+    if (figureSpecs.length === 0) {
+      const autoDetected = this.detectVisualFigureBboxesOnCanvas(pageNum, sourceCanvas);
+      autoDetected.forEach(spec => addSpec(spec.bbox, spec.rotation, spec.caption));
+    }
+
+    const extracted = [];
+    for (const spec of figureSpecs) {
+      try {
+        const dataUrl = this.cropBboxFromCanvas(sourceCanvas, spec.bbox, spec.rotation);
+        const uint8Array = this.dataUrlToUint8Array(dataUrl);
+        if (!uint8Array) continue;
+        const { width, height } = this.getPngDimensions(uint8Array);
+        extracted.push({
+          ...spec,
+          dataUrl,
+          uint8Array,
+          width,
+          height
+        });
+      } catch (e) {
+        console.warn(`Không thể cắt hình trang ${pageNum}:`, e);
+      }
+    }
+    return extracted;
+  }
+
+  formatSourcePageStructuredParagraphs(profile, excludeFigures = []) {
+    const items = Array.isArray(profile?.textItems) ? profile.textItems : [];
+    if (items.length === 0) {
+      const raw = String(profile?.text || '').trim();
+      return raw ? [{ type: 'paragraph', text: raw }] : [];
+    }
+
+    // Filter out rotated vertical text if a rotated figure/table image is already extracted for this page,
+    // and filter out text labels strictly inside extracted figure bounding boxes.
+    const hasRotatedFigureImage = excludeFigures.some(f => f.rotation === 90 || f.rotation === 270);
+    const filteredItems = items.filter(item => {
+      const text = String(item.text || '').trim();
+      if (!text) return false;
+      if (hasRotatedFigureImage && (item.rotation === 90 || item.rotation === 270)) return false;
+      const [y0, x0, y1, x1] = item.bbox || [];
+      // Skip tiny page number or running header/footer at top/bottom edge
+      if ((y1 < 42 || y0 > 948) && text.length < 75) return false;
+      const cx = (x0 + x1) / 2;
+      const cy = (y0 + y1) / 2;
+      const insideFigure = excludeFigures.some(fig => {
+        const [fy0, fx0, fy1, fx1] = fig.bbox || [];
+        return cy >= fy0 + 6 && cy <= fy1 - 6 && cx >= fx0 + 6 && cx <= fx1 - 6;
+      });
+      return !insideFigure;
+    });
+
+    if (filteredItems.length === 0) return [];
+
+    // Group items into reading columns (full-width header -> left column -> right column for 2-column pages)
+    const buildColumnLines = colItems => {
+      const sorted = [...colItems].sort((a, b) => {
+        const ay = (a.bbox[0] + a.bbox[2]) / 2;
+        const by = (b.bbox[0] + b.bbox[2]) / 2;
+        if (Math.abs(ay - by) > 4.5) return ay - by;
+        return a.bbox[1] - b.bbox[1];
+      });
+
+      const lines = [];
+      let currentParts = [];
+      let currentYMin = null;
+      let currentYMax = null;
+      let currentXMin = null;
+      let currentXMax = null;
+
+      const flush = () => {
+        const lineText = currentParts.join(' ').replace(/\s+/g, ' ').trim();
+        if (lineText) {
+          lines.push({
+            text: lineText,
+            ymin: currentYMin,
+            ymax: currentYMax,
+            xmin: currentXMin,
+            xmax: currentXMax,
+            height: Math.max(4, (currentYMax || 0) - (currentYMin || 0))
+          });
+        }
+        currentParts = [];
+        currentYMin = null;
+        currentYMax = null;
+        currentXMin = null;
+        currentXMax = null;
+      };
+
+      sorted.forEach(item => {
+        const [y0, x0, y1, x1] = item.bbox;
+        const cy = (y0 + y1) / 2;
+        const lineCy = currentYMin !== null && currentYMax !== null ? (currentYMin + currentYMax) / 2 : null;
+        if (currentParts.length > 0 && lineCy !== null && Math.abs(cy - lineCy) > 5) {
+          flush();
+        }
+        currentParts.push(String(item.text || '').trim());
+        currentYMin = currentYMin === null ? y0 : Math.min(currentYMin, y0);
+        currentYMax = currentYMax === null ? y1 : Math.max(currentYMax, y1);
+        currentXMin = currentXMin === null ? x0 : Math.min(currentXMin, x0);
+        currentXMax = currentXMax === null ? x1 : Math.max(currentXMax, x1);
+      });
+      flush();
+      return lines;
+    };
+
+    let orderedLines = [];
+    if (profile?.columnCount === 2) {
+      const topSpanning = [];
+      const leftCol = [];
+      const rightCol = [];
+      filteredItems.forEach(item => {
+        const [, x0, y1, x1] = item.bbox;
+        const cx = (x0 + x1) / 2;
+        if ((x0 < 380 && x1 > 620) || (y1 < 220 && (x1 - x0) > 480)) {
+          topSpanning.push(item);
+        } else if (cx < 500) {
+          leftCol.push(item);
+        } else {
+          rightCol.push(item);
+        }
+      });
+      orderedLines = [
+        ...buildColumnLines(topSpanning),
+        ...buildColumnLines(leftCol),
+        ...buildColumnLines(rightCol)
+      ];
+    } else {
+      orderedLines = buildColumnLines(filteredItems);
+    }
+
+    // Merge lines into paragraphs and headings
+    const blocks = [];
+    let paraLines = [];
+    let prevLine = null;
+
+    const flushPara = () => {
+      if (paraLines.length === 0) return;
+      let combined = '';
+      paraLines.forEach(line => {
+        if (!combined) {
+          combined = line;
+        } else if (/[A-Za-z]-$/.test(combined) && /^[a-z]/.test(line)) {
+          combined = combined.slice(0, -1) + line;
+        } else {
+          combined += ' ' + line;
+        }
+      });
+      const clean = combined.replace(/\s+/g, ' ').trim();
+      if (clean) {
+        const isHeading = paraLines.length <= 2
+          && clean.length <= 110
+          && !/[.;:,]$/.test(clean)
+          && (/^(?:abstract|introduction|background|methods?|results?|discussion|conclusions?|references|acknowledg|supplementary|\d+(?:\.\d+)*\s+[A-Z])/i.test(clean)
+            || (paraLines.length === 1 && clean.split(/\s+/).length <= 9 && /^[A-Z]/.test(clean)));
+        blocks.push({
+          type: isHeading ? 'heading' : 'paragraph',
+          text: clean
+        });
+      }
+      paraLines = [];
+    };
+
+    orderedLines.forEach(line => {
+      if (prevLine) {
+        const yGap = line.ymin - prevLine.ymax;
+        const colJump = Math.abs(line.xmin - prevLine.xmin) > 180;
+        const prevEndedSentence = /[.!?:]$/.test(prevLine.text) && (prevLine.xmax - prevLine.xmin) < 280;
+        if (yGap > 13 || yGap < -20 || colJump || prevEndedSentence) {
+          flushPara();
+        }
+      }
+      paraLines.push(line.text);
+      prevLine = line;
+    });
+    flushPara();
+
+    return blocks;
+  }
+
   formatSourcePageText(profile) {
     const items = Array.isArray(profile?.textItems) ? profile.textItems : [];
     if (items.length === 0) return String(profile?.text || '').trim();
@@ -3731,13 +4133,16 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
   buildSourceTextMarkdown() {
     const title = this.currentFile?.name || 'PDF nguồn';
     const sections = this.sourcePageProfiles.map(profile => {
-      const body = this.formatSourcePageText(profile) || '*(Không trích xuất được lớp văn bản ở trang này.)*';
+      const blocks = this.formatSourcePageStructuredParagraphs(profile, []);
+      const body = blocks.length > 0
+        ? blocks.map(b => (b.type === 'heading' ? `### ${b.text}` : b.text)).join('\n\n')
+        : (this.formatSourcePageText(profile) || '*(Không trích xuất được lớp văn bản ở trang này.)*');
       return `## Trang nguồn ${profile.pageNum}\n\n${body}`;
     });
-    return `# ${title} — Văn bản gốc trích xuất\n\n> Trích xuất từ lớp văn bản có sẵn trong PDF bằng PDF.js. Tệp này không chứa ảnh/vector; chữ nằm bên trong ảnh scan có thể không xuất hiện. Dùng PDF gốc để đối chiếu hình và bố cục.\n\n${sections.join('\n\n---\n\n')}\n`;
+    return `# ${title} — Văn bản gốc trích xuất\n\n> Trích xuất từ lớp văn bản có sẵn trong PDF bằng PDF.js (định dạng Markdown gọn nhẹ không kèm ảnh; chọn **Xuất Bản gốc Word (.docx)** hoặc **Xuất Bản gốc HTML (.html)** nếu muốn chèn đầy đủ hình minh họa trong bài).\n\n${sections.join('\n\n---\n\n')}\n`;
   }
 
-  buildSourceTextHtml() {
+  async buildSourceTextHtml() {
     const title = this.currentFile?.name || 'PDF nguồn';
     const escapeHtml = value => String(value).replace(/[&<>"']/g, character => ({
       '&': '&amp;',
@@ -3746,39 +4151,204 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
       '"': '&quot;',
       "'": '&#39;'
     }[character]));
-    const sections = this.sourcePageProfiles.map(profile => {
-      const body = this.formatSourcePageText(profile) || 'Không trích xuất được lớp văn bản ở trang này.';
-      return `<section id="source-page-${profile.pageNum}"><h2>Trang nguồn ${profile.pageNum}</h2><pre>${escapeHtml(body)}</pre></section>`;
-    }).join('\n');
 
+    const sectionHtmlList = [];
+    for (const profile of this.sourcePageProfiles) {
+      const figures = await this.extractSourcePageFigures(profile.pageNum);
+      const blocks = this.formatSourcePageStructuredParagraphs(profile, figures);
+      const figuresHtml = figures.map(fig => `
+        <figure class="source-figure">
+          <img src="${fig.dataUrl}" alt="${escapeHtml(fig.caption || `Figure Page ${profile.pageNum}`)}" />
+          ${fig.caption ? `<figcaption>${escapeHtml(fig.caption)}</figcaption>` : ''}
+        </figure>
+      `).join('\n');
+
+      const paragraphsHtml = blocks.length > 0
+        ? blocks.map(b => (b.type === 'heading' ? `<h3>${escapeHtml(b.text)}</h3>` : `<p>${escapeHtml(b.text)}</p>`)).join('\n')
+        : `<pre>${escapeHtml(this.formatSourcePageText(profile) || 'Không trích xuất được lớp văn bản ở trang này.')}</pre>`;
+
+      sectionHtmlList.push(`
+        <section id="source-page-${profile.pageNum}">
+          <h2>Trang nguồn ${profile.pageNum}</h2>
+          ${figuresHtml}
+          ${paragraphsHtml}
+        </section>
+      `);
+    }
+
+    const roles = this.resolveActiveTypographyRoles();
     return `<!doctype html>
-<html lang="vi">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>${escapeHtml(title)} — Văn bản gốc trích xuất</title>
+  <title>${escapeHtml(title)} — Bản gốc kèm hình minh họa</title>
   <style>
     :root { color-scheme: light; }
-    body { max-width: 920px; margin: 0 auto; padding: 32px 24px; color: #1f2937; font: 16px/1.65 system-ui, sans-serif; }
-    h1 { font-size: 1.5rem; }
-    h2 { margin: 0 0 12px; font-size: 1.1rem; }
-    .notice { padding: 12px 14px; background: #f1f5f9; border-left: 3px solid #64748b; color: #475569; }
+    body { max-width: 920px; margin: 0 auto; padding: 32px 24px; color: #1f2937; font-family: ${roles.body.css}; font-size: ${this.fontSize}px; line-height: 1.68; background: #fafafa; }
+    h1, h2, h3 { font-family: ${roles.heading.css}; color: #0f172a; }
+    h1 { font-size: ${this.h1Size}px; }
+    h2 { margin: 0 0 14px; font-size: ${this.h2Size}px; border-bottom: 2px solid #e2e8f0; padding-bottom: 6px; }
+    h3 { margin: 18px 0 8px; font-size: ${this.h3Size}px; }
+    p { margin: 0 0 14px; text-align: justify; }
     section { padding: 24px 0; border-bottom: 1px solid #dbe2ea; }
+    .source-figure { margin: 20px 0; padding: 14px; background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; text-align: center; }
+    .source-figure img { max-width: 100%; height: auto; border-radius: 4px; }
+    .source-figure figcaption { margin-top: 8px; font-family: ${roles.caption.css}; font-style: ${roles.captionItalic ? 'italic' : 'normal'}; font-size: ${this.captionSize}px; color: #475569; }
     pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
-    @media print { body { max-width: none; padding: 0; } section { break-inside: auto; } }
+    @media print { body { max-width: none; padding: 0; background: #fff; } section { break-inside: auto; } }
   </style>
 </head>
 <body>
-  <h1>${escapeHtml(title)} — Văn bản gốc trích xuất</h1>
-  <p class="notice">Trích xuất từ lớp văn bản có sẵn trong PDF bằng PDF.js. Tệp này không chứa ảnh/vector; chữ nằm bên trong ảnh scan có thể không xuất hiện. Dùng PDF gốc để đối chiếu hình và bố cục.</p>
-  ${sections}
+  <h1>${escapeHtml(title)} — Bản gốc kèm hình minh họa</h1>
+  ${sectionHtmlList.join('\n')}
 </body>
 </html>`;
   }
 
-  exportSourceText(format) {
+  async exportSourceDocx() {
     if (!this.pdfDoc || this.sourcePageProfiles.length === 0) {
-      this.showToast('Hãy nạp PDF trước khi xuất văn bản gốc.', 'warning');
+      this.showToast('Hãy nạp PDF trước khi xuất bản gốc Word (.docx).', 'warning');
+      return;
+    }
+
+    try {
+      this.showToast('⏳ Đang trích xuất văn bản gốc & cắt hình minh họa vào file Word (.docx)...', 'info');
+      const title = this.getExportBaseName();
+      const { Document, Packer, Paragraph, TextRun, ImageRun, HeadingLevel, AlignmentType } = docx;
+      const roles = this.resolveActiveTypographyRoles();
+      const makeTextRun = (text, opts = {}) => new TextRun({
+        text: String(text || ''),
+        font: opts.font || roles.body.docx,
+        ...opts
+      });
+
+      const docChildren = [
+        new Paragraph({
+          children: [makeTextRun(`${this.currentFile?.name || title} — Original Document`, { bold: true, font: roles.heading.docx })],
+          heading: HeadingLevel.TITLE
+        }),
+        new Paragraph({ text: '' })
+      ];
+
+      let totalEmbeddedFigures = 0;
+
+      for (const profile of this.sourcePageProfiles) {
+        docChildren.push(
+          new Paragraph({
+            children: [makeTextRun(`--- Page ${profile.pageNum} ---`, { bold: true, font: roles.heading.docx })],
+            heading: HeadingLevel.HEADING_2,
+            spacing: { before: 240, after: 120 }
+          })
+        );
+
+        const figures = await this.extractSourcePageFigures(profile.pageNum);
+        const blocks = this.formatSourcePageStructuredParagraphs(profile, figures);
+
+        // Insert cropped figures/tables for this page
+        if (ImageRun && figures.length > 0) {
+          figures.forEach(fig => {
+            const maxW = 550;
+            const maxH = 680;
+            const scale = Math.min(1, maxW / Math.max(1, fig.width), maxH / Math.max(1, fig.height));
+            const targetW = Math.max(140, Math.round(fig.width * scale));
+            const targetH = Math.max(90, Math.round(fig.height * scale));
+
+            docChildren.push(
+              new Paragraph({
+                children: [
+                  new ImageRun({
+                    data: fig.uint8Array,
+                    transformation: { width: targetW, height: targetH },
+                    type: 'png'
+                  })
+                ],
+                alignment: AlignmentType ? AlignmentType.CENTER : undefined,
+                spacing: { before: 160, after: 80 }
+              })
+            );
+            totalEmbeddedFigures += 1;
+
+            if (fig.caption) {
+              docChildren.push(
+                new Paragraph({
+                  children: [
+                    makeTextRun(fig.caption, {
+                      font: roles.caption.docx,
+                      italics: roles.captionItalic
+                    })
+                  ],
+                  alignment: AlignmentType ? AlignmentType.CENTER : undefined,
+                  spacing: { after: 180 }
+                })
+              );
+            }
+          });
+        }
+
+        // Insert structured paragraphs and headings of the original text
+        if (blocks.length > 0) {
+          blocks.forEach(block => {
+            if (block.type === 'heading') {
+              docChildren.push(
+                new Paragraph({
+                  children: [makeTextRun(block.text, { bold: true, font: roles.heading.docx })],
+                  heading: HeadingLevel.HEADING_3,
+                  spacing: { before: 180, after: 80 }
+                })
+              );
+            } else {
+              docChildren.push(
+                new Paragraph({
+                  children: [makeTextRun(block.text, { font: roles.body.docx })],
+                  spacing: { after: 140 }
+                })
+              );
+            }
+          });
+        } else {
+          const fallbackText = this.formatSourcePageText(profile);
+          if (fallbackText) {
+            fallbackText.split(/\n{2,}/).forEach(para => {
+              const clean = para.trim();
+              if (clean) {
+                docChildren.push(
+                  new Paragraph({
+                    children: [makeTextRun(clean, { font: roles.body.docx })],
+                    spacing: { after: 140 }
+                  })
+                );
+              }
+            });
+          }
+        }
+      }
+
+      const doc = new Document({
+        sections: [{ children: docChildren }]
+      });
+
+      const blob = await Packer.toBlob(doc);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${title}_ban_goc.docx`;
+      a.click();
+      URL.revokeObjectURL(url);
+
+      this.showToast(
+        `✅ Đã xuất Bản gốc Word: ${title}_ban_goc.docx (${this.totalPages} trang, đính kèm ${totalEmbeddedFigures} hình/bảng)!`,
+        'success'
+      );
+    } catch (err) {
+      console.error('Lỗi xuất Bản gốc Word (.docx):', err);
+      this.showToast(`Lỗi tạo file Word bản gốc: ${err.message}`, 'error');
+    }
+  }
+
+  async exportSourceText(format) {
+    if (!this.pdfDoc || this.sourcePageProfiles.length === 0) {
+      this.showToast('Hãy nạp PDF trước khi xuất bản gốc.', 'warning');
       return;
     }
     const hasText = this.sourcePageProfiles.some(profile => (
@@ -3789,15 +4359,19 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
       return;
     }
 
+    this.exportDropdown?.parentElement.classList.remove('open');
     const title = this.getExportBaseName();
-    if (format === 'html') {
-      this.downloadFile(this.buildSourceTextHtml(), `${title}_text_goc.html`, 'text/html;charset=utf-8');
-      this.showToast(`Đã xuất text gốc HTML: ${title}_text_goc.html`, 'success');
+    if (format === 'docx') {
+      await this.exportSourceDocx();
+    } else if (format === 'html') {
+      this.showToast('⏳ Đang tạo file HTML bản gốc kèm hình...', 'info');
+      const htmlContent = await this.buildSourceTextHtml();
+      this.downloadFile(htmlContent, `${title}_ban_goc.html`, 'text/html;charset=utf-8');
+      this.showToast(`✅ Đã xuất Bản gốc HTML kèm hình: ${title}_ban_goc.html`, 'success');
     } else {
       this.downloadFile(this.buildSourceTextMarkdown(), `${title}_text_goc.md`, 'text/markdown;charset=utf-8');
       this.showToast(`Đã xuất text gốc Markdown: ${title}_text_goc.md`, 'success');
     }
-    this.exportDropdown?.parentElement.classList.remove('open');
   }
 
   exportHtml() {
@@ -3927,10 +4501,10 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
     if (!this.ensureExportReady('Word')) return;
 
     try {
-      this.showToast('Đang tạo file Word (.docx)...', 'info');
+      this.showToast('Đang tạo file Word (.docx) kèm hình minh họa...', 'info');
       const title = this.getExportBaseName();
 
-      const { Document, Packer, Paragraph, TextRun, HeadingLevel, Table, TableRow, TableCell, WidthType } = docx;
+      const { Document, Packer, Paragraph, TextRun, ImageRun, HeadingLevel, AlignmentType, Table, TableRow, TableCell, WidthType } = docx;
       const roles = this.resolveActiveTypographyRoles();
       const makeTextRun = (text, opts = {}) => new TextRun({ text: String(text || ''), font: opts.font || roles.body.docx, ...opts });
 
@@ -3951,13 +4525,47 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
             })
           );
 
+          const liveBlock = document.getElementById(`chunk-block-${c.id}`);
+          const rawHtml = liveBlock
+            ? (liveBlock.querySelector('.chunk-inner-content')?.innerHTML || c.translatedHtml)
+            : c.translatedHtml;
+
           const tempDiv = document.createElement('div');
-          tempDiv.innerHTML = c.translatedHtml;
+          tempDiv.innerHTML = rawHtml;
           tempDiv.querySelectorAll('.source-page-toolbar, .figure-action-bar').forEach(el => el.remove());
 
-          const elements = tempDiv.querySelectorAll('h1, h2, h3, p, li, figcaption, table');
+          const elements = tempDiv.querySelectorAll('h1, h2, h3, p, li, img.original-cropped-figure, figcaption, table');
           elements.forEach(el => {
             if (el.tagName !== 'TABLE' && el.closest('table')) return;
+
+            if (el.tagName === 'IMG' && ImageRun) {
+              const src = el.getAttribute('src') || '';
+              if (src.startsWith('data:image/')) {
+                const uint8Array = this.dataUrlToUint8Array(src);
+                if (uint8Array) {
+                  const { width, height } = this.getPngDimensions(uint8Array);
+                  const maxW = 550;
+                  const maxH = 680;
+                  const scale = Math.min(1, maxW / Math.max(1, width), maxH / Math.max(1, height));
+                  const targetW = Math.max(140, Math.round(width * scale));
+                  const targetH = Math.max(90, Math.round(height * scale));
+                  docChildren.push(
+                    new Paragraph({
+                      children: [
+                        new ImageRun({
+                          data: uint8Array,
+                          transformation: { width: targetW, height: targetH },
+                          type: 'png'
+                        })
+                      ],
+                      alignment: AlignmentType ? AlignmentType.CENTER : undefined,
+                      spacing: { before: 140, after: 100 }
+                    })
+                  );
+                }
+              }
+              return;
+            }
 
             if (el.tagName === 'TABLE' && Table && TableRow && TableCell) {
               const rows = Array.from(el.querySelectorAll('tr')).map((tr, rowIndex) => {
@@ -4030,7 +4638,7 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
       a.click();
       URL.revokeObjectURL(url);
 
-      this.showToast(`Đã xuất file Word: ${title}.docx`, 'success');
+      this.showToast(`Đã xuất file Word kèm hình: ${title}.docx`, 'success');
     } catch (err) {
       console.error('Lỗi xuất DOCX:', err);
       this.showToast(`Lỗi tạo file Word: ${err.message}`, 'error');
