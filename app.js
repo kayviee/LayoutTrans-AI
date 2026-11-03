@@ -38,6 +38,19 @@ const PROMPT_PRESETS = Object.freeze({
   academic: `Dịch theo văn phong khoa học - học thuật chuẩn mực, mạch lạc, chính xác. Mọi thuật ngữ chuyên ngành, tên mô hình, phương pháp và từ viết tắt giữ nguyên tiếng Anh gốc trong ngoặc đơn ngay sau cụm từ tiếng Việt: Tiếng Việt (English Term). Xưng hô nhóm tác giả là "chúng tôi".`
 });
 
+const DEFAULT_TYPOGRAPHY_CONFIG = Object.freeze({
+  typographyMode: 'split',
+  headingFont: 'inter',
+  bodyFont: 'georgia',
+  captionFont: 'georgia',
+  captionItalic: true,
+  h1Size: 26,
+  h2Size: 20,
+  h3Size: 17,
+  bodySize: 16,
+  captionSize: 14
+});
+
 class LayoutTransApp {
   constructor() {
     this.apiKey = localStorage.getItem('layouttrans_gemini_key') || '';
@@ -67,9 +80,47 @@ class LayoutTransApp {
     } else {
       this.customPrompt = existingPrompt || '';
     }
-    this.fontPreference = localStorage.getItem('layouttrans_font_preference') || 'auto';
+
+    // Initialize role-based typography & custom sizes (Default: Heading Inter + Body Georgia + Caption Georgia Italic)
+    const typoV2Init = localStorage.getItem('layouttrans_typography_v2_init');
+    if (!typoV2Init) {
+      this.typographyMode = DEFAULT_TYPOGRAPHY_CONFIG.typographyMode;
+      this.headingFont = DEFAULT_TYPOGRAPHY_CONFIG.headingFont;
+      this.bodyFont = DEFAULT_TYPOGRAPHY_CONFIG.bodyFont;
+      this.captionFont = DEFAULT_TYPOGRAPHY_CONFIG.captionFont;
+      this.captionItalic = DEFAULT_TYPOGRAPHY_CONFIG.captionItalic;
+      this.h1Size = DEFAULT_TYPOGRAPHY_CONFIG.h1Size;
+      this.h2Size = DEFAULT_TYPOGRAPHY_CONFIG.h2Size;
+      this.h3Size = DEFAULT_TYPOGRAPHY_CONFIG.h3Size;
+      this.fontSize = DEFAULT_TYPOGRAPHY_CONFIG.bodySize;
+      this.captionSize = DEFAULT_TYPOGRAPHY_CONFIG.captionSize;
+      this.persistTypographySettings();
+      localStorage.setItem('layouttrans_typography_v2_init', '1');
+    } else {
+      const savedMode = localStorage.getItem('layouttrans_typography_mode');
+      this.typographyMode = savedMode === 'unified' ? 'unified' : 'split';
+      const savedHeadingFont = localStorage.getItem('layouttrans_heading_font') || DEFAULT_TYPOGRAPHY_CONFIG.headingFont;
+      this.headingFont = TRANSLATION_FONT_PRESETS[savedHeadingFont] ? savedHeadingFont : DEFAULT_TYPOGRAPHY_CONFIG.headingFont;
+      const savedBodyFont = localStorage.getItem('layouttrans_body_font') || DEFAULT_TYPOGRAPHY_CONFIG.bodyFont;
+      this.bodyFont = TRANSLATION_FONT_PRESETS[savedBodyFont] ? savedBodyFont : DEFAULT_TYPOGRAPHY_CONFIG.bodyFont;
+      const savedCaptionFont = localStorage.getItem('layouttrans_caption_font') || DEFAULT_TYPOGRAPHY_CONFIG.captionFont;
+      this.captionFont = TRANSLATION_FONT_PRESETS[savedCaptionFont] ? savedCaptionFont : DEFAULT_TYPOGRAPHY_CONFIG.captionFont;
+      this.captionItalic = localStorage.getItem('layouttrans_caption_italic') !== 'false';
+
+      const clampInt = (raw, min, max, fallback) => {
+        const parsed = parseInt(raw, 10);
+        return Number.isFinite(parsed) ? Math.max(min, Math.min(max, parsed)) : fallback;
+      };
+      this.h1Size = clampInt(localStorage.getItem('layouttrans_h1_size'), 18, 40, DEFAULT_TYPOGRAPHY_CONFIG.h1Size);
+      this.h2Size = clampInt(localStorage.getItem('layouttrans_h2_size'), 15, 32, DEFAULT_TYPOGRAPHY_CONFIG.h2Size);
+      this.h3Size = clampInt(localStorage.getItem('layouttrans_h3_size'), 13, 26, DEFAULT_TYPOGRAPHY_CONFIG.h3Size);
+      this.fontSize = clampInt(localStorage.getItem('layouttrans_font_size'), 12, 28, DEFAULT_TYPOGRAPHY_CONFIG.bodySize);
+      this.captionSize = clampInt(localStorage.getItem('layouttrans_caption_size'), 11, 22, DEFAULT_TYPOGRAPHY_CONFIG.captionSize);
+    }
+
+    this.fontPreference = localStorage.getItem('layouttrans_font_preference') || 'georgia';
     if (this.fontPreference !== 'auto' && this.fontPreference !== 'custom' && !TRANSLATION_FONT_PRESETS[this.fontPreference]) {
-      this.fontPreference = 'auto';
+      this.fontPreference = 'georgia';
     }
     this.pendingFontPreference = this.fontPreference;
     this.customFontFamily = localStorage.getItem('layouttrans_custom_font_family') || '';
@@ -86,7 +137,7 @@ class LayoutTransApp {
     this.sourceTypography = null;
     this.sourceTypographySummary = '';
     this.documentTypography = 'serif';
-    this.documentFontFamily = TRANSLATION_FONT_PRESETS['times-new-roman'].css;
+    this.documentFontFamily = TRANSLATION_FONT_PRESETS['georgia'].css;
     this.requestTimeoutMs = 300000;
     this.maxAutomaticAttempts = 5;
     this.highDemandFallbackModels = [
@@ -106,8 +157,6 @@ class LayoutTransApp {
     this.syncScroll = localStorage.getItem('layouttrans_sync_scroll') !== 'false';
     const savedZoom = parseFloat(localStorage.getItem('layouttrans_zoom_scale') || '1.0');
     this.zoomScale = Number.isFinite(savedZoom) ? Math.max(0.6, Math.min(2.2, savedZoom)) : 1.0;
-    const savedFontSize = parseInt(localStorage.getItem('layouttrans_font_size') || '16', 10);
-    this.fontSize = Number.isFinite(savedFontSize) ? Math.max(12, Math.min(28, savedFontSize)) : 16;
     const savedViewMode = localStorage.getItem('layouttrans_view_mode') || 'split';
     this.viewMode = ['split', 'translation-only', 'original-only'].includes(savedViewMode) ? savedViewMode : 'split';
     const savedSplitPct = parseFloat(localStorage.getItem('layouttrans_pane_split_pct') || '50');
@@ -119,6 +168,19 @@ class LayoutTransApp {
     this.loadSavedTheme();
     this.restorePersistedUiState();
     this.applyTranslationTypography();
+  }
+
+  persistTypographySettings() {
+    localStorage.setItem('layouttrans_typography_mode', this.typographyMode);
+    localStorage.setItem('layouttrans_heading_font', this.headingFont);
+    localStorage.setItem('layouttrans_body_font', this.bodyFont);
+    localStorage.setItem('layouttrans_caption_font', this.captionFont);
+    localStorage.setItem('layouttrans_caption_italic', String(this.captionItalic));
+    localStorage.setItem('layouttrans_h1_size', String(this.h1Size));
+    localStorage.setItem('layouttrans_h2_size', String(this.h2Size));
+    localStorage.setItem('layouttrans_h3_size', String(this.h3Size));
+    localStorage.setItem('layouttrans_font_size', String(this.fontSize));
+    localStorage.setItem('layouttrans_caption_size', String(this.captionSize));
   }
 
   initElements() {
@@ -155,6 +217,19 @@ class LayoutTransApp {
     this.apiKeyTestResult = document.getElementById('apiKeyTestResult');
     this.chunkSizeInput = document.getElementById('chunkSizeInput');
     this.chunkSizeDisplay = document.getElementById('chunkSizeDisplay');
+    this.typographyModeSelect = document.getElementById('typographyModeSelect');
+    this.splitTypographyBox = document.getElementById('splitTypographyBox');
+    this.unifiedTypographyBox = document.getElementById('unifiedTypographyBox');
+    this.headingFontInput = document.getElementById('headingFontInput');
+    this.bodyFontInput = document.getElementById('bodyFontInput');
+    this.captionFontInput = document.getElementById('captionFontInput');
+    this.captionItalicInput = document.getElementById('captionItalicInput');
+    this.resetTypographyBtn = document.getElementById('resetTypographyBtn');
+    this.h1SizeInput = document.getElementById('h1SizeInput');
+    this.h2SizeInput = document.getElementById('h2SizeInput');
+    this.h3SizeInput = document.getElementById('h3SizeInput');
+    this.bodySizeInput = document.getElementById('bodySizeInput');
+    this.captionSizeInput = document.getElementById('captionSizeInput');
     this.fontPreferenceInput = document.getElementById('fontPreferenceInput');
     this.quickFontSelector = document.getElementById('quickFontSelector');
     this.customFontFamilyRow = document.getElementById('customFontFamilyRow');
@@ -217,17 +292,41 @@ class LayoutTransApp {
     this.toastContainer = document.getElementById('toastContainer');
   }
 
-  restorePersistedUiState() {
-    document.documentElement.style.setProperty('--reader-font-size', `${this.fontSize}px`);
+  syncTypographyInputsFromState() {
+    if (this.typographyModeSelect) this.typographyModeSelect.value = this.typographyMode;
+    if (this.splitTypographyBox) this.splitTypographyBox.style.display = this.typographyMode === 'split' ? 'block' : 'none';
+    if (this.unifiedTypographyBox) this.unifiedTypographyBox.style.display = this.typographyMode === 'unified' ? 'block' : 'none';
+    if (this.headingFontInput) this.headingFontInput.value = this.headingFont;
+    if (this.bodyFontInput) this.bodyFontInput.value = this.bodyFont;
+    if (this.captionFontInput) this.captionFontInput.value = this.captionFont;
+    if (this.captionItalicInput) this.captionItalicInput.checked = Boolean(this.captionItalic);
+    if (this.h1SizeInput) this.h1SizeInput.value = String(this.h1Size);
+    if (this.h2SizeInput) this.h2SizeInput.value = String(this.h2Size);
+    if (this.h3SizeInput) this.h3SizeInput.value = String(this.h3Size);
+    if (this.bodySizeInput) this.bodySizeInput.value = String(this.fontSize);
+    if (this.captionSizeInput) this.captionSizeInput.value = String(this.captionSize);
     if (this.fontSizeDisplay) this.fontSizeDisplay.textContent = `${this.fontSize}px`;
-    if (this.pdfZoomLevel) this.pdfZoomLevel.textContent = `${Math.round(this.zoomScale * 100)}%`;
-    if (this.syncScrollBtn) this.syncScrollBtn.classList.toggle('active', this.syncScroll);
-    if (this.quickFontSelector) this.quickFontSelector.value = this.fontPreference;
     if (this.fontPreferenceInput) this.fontPreferenceInput.value = this.fontPreference;
     if (this.customFontFamilyInput) this.customFontFamilyInput.value = this.customFontFamily;
+    if (this.quickFontSelector) {
+      const splitOpt = this.quickFontSelector.querySelector('option[value="split-custom"]');
+      if (splitOpt) {
+        const hLabel = TRANSLATION_FONT_PRESETS[this.headingFont]?.label || 'Inter';
+        const bLabel = TRANSLATION_FONT_PRESETS[this.bodyFont]?.label || 'Georgia';
+        splitOpt.textContent = `✨ Phối riêng: Heading ${hLabel} + Body ${bLabel}`;
+      }
+      this.quickFontSelector.value = this.typographyMode === 'split' ? 'split-custom' : this.fontPreference;
+    }
+    this.updateCustomFontFamilyVisibility();
+  }
+
+  restorePersistedUiState() {
+    if (this.pdfZoomLevel) this.pdfZoomLevel.textContent = `${Math.round(this.zoomScale * 100)}%`;
+    if (this.syncScrollBtn) this.syncScrollBtn.classList.toggle('active', this.syncScroll);
     if (this.chunkSizeInput) this.chunkSizeInput.value = String(this.chunkSize);
     if (this.chunkSizeDisplay) this.chunkSizeDisplay.textContent = `${this.chunkSize} trang`;
     if (this.customPromptInput) this.customPromptInput.value = this.customPrompt;
+    this.syncTypographyInputsFromState();
     this.setViewMode(this.viewMode, false);
     if (this.paneOriginal && this.paneTranslated && this.paneSplitPct !== 50) {
       this.paneOriginal.style.flex = `0 0 ${this.paneSplitPct}%`;
@@ -282,15 +381,91 @@ class LayoutTransApp {
     this.chunkSizeInput.addEventListener('input', (e) => {
       this.chunkSizeDisplay.textContent = `${e.target.value} trang`;
     });
+
+    // Role-based Typography & Custom Size Live Controls
+    if (this.typographyModeSelect) {
+      this.typographyModeSelect.addEventListener('change', (e) => {
+        this.typographyMode = e.target.value === 'unified' ? 'unified' : 'split';
+        this.persistTypographySettings();
+        this.syncTypographyInputsFromState();
+        this.applyTranslationTypography();
+      });
+    }
+    if (this.headingFontInput) {
+      this.headingFontInput.addEventListener('change', (e) => {
+        this.headingFont = e.target.value;
+        this.typographyMode = 'split';
+        this.persistTypographySettings();
+        this.syncTypographyInputsFromState();
+        this.applyTranslationTypography();
+      });
+    }
+    if (this.bodyFontInput) {
+      this.bodyFontInput.addEventListener('change', (e) => {
+        this.bodyFont = e.target.value;
+        this.typographyMode = 'split';
+        this.persistTypographySettings();
+        this.syncTypographyInputsFromState();
+        this.applyTranslationTypography();
+      });
+    }
+    if (this.captionFontInput) {
+      this.captionFontInput.addEventListener('change', (e) => {
+        this.captionFont = e.target.value;
+        this.persistTypographySettings();
+        this.syncTypographyInputsFromState();
+        this.applyTranslationTypography();
+      });
+    }
+    if (this.captionItalicInput) {
+      this.captionItalicInput.addEventListener('change', (e) => {
+        this.captionItalic = Boolean(e.target.checked);
+        this.persistTypographySettings();
+        this.applyTranslationTypography();
+      });
+    }
+
+    const bindSizeInput = (inputEl, propName, minVal, maxVal) => {
+      if (!inputEl) return;
+      const onSizeChange = () => {
+        const parsed = parseInt(inputEl.value, 10);
+        if (!Number.isFinite(parsed)) return;
+        const clamped = Math.max(minVal, Math.min(maxVal, parsed));
+        this[propName] = clamped;
+        this.persistTypographySettings();
+        if (propName === 'fontSize' && this.fontSizeDisplay) {
+          this.fontSizeDisplay.textContent = `${this.fontSize}px`;
+        }
+        this.applyTranslationTypography();
+      };
+      inputEl.addEventListener('input', onSizeChange);
+      inputEl.addEventListener('change', () => {
+        onSizeChange();
+        inputEl.value = String(this[propName]);
+      });
+    };
+    bindSizeInput(this.h1SizeInput, 'h1Size', 18, 40);
+    bindSizeInput(this.h2SizeInput, 'h2Size', 15, 32);
+    bindSizeInput(this.h3SizeInput, 'h3Size', 13, 26);
+    bindSizeInput(this.bodySizeInput, 'fontSize', 12, 28);
+    bindSizeInput(this.captionSizeInput, 'captionSize', 11, 22);
+
+    if (this.resetTypographyBtn) {
+      this.resetTypographyBtn.addEventListener('click', () => {
+        this.resetTypographyToDefaults();
+      });
+    }
+
     this.fontPreferenceInput.value = this.fontPreference;
     this.customFontFamilyInput.value = this.customFontFamily;
     this.fontPreferenceInput.addEventListener('change', (event) => {
       const val = event.target.value;
       this.pendingFontPreference = val;
       this.fontPreference = val;
+      this.typographyMode = 'unified';
       localStorage.setItem('layouttrans_font_preference', val);
-      if (this.quickFontSelector) this.quickFontSelector.value = val;
-      this.updateCustomFontFamilyVisibility();
+      this.persistTypographySettings();
+      this.syncTypographyInputsFromState();
       this.applyTranslationTypography(val);
     });
     this.customFontFamilyInput.addEventListener('input', () => {
@@ -332,24 +507,36 @@ class LayoutTransApp {
 
     // Quick Font Selector on Right Pane Header
     if (this.quickFontSelector) {
-      this.quickFontSelector.value = this.fontPreference;
       this.quickFontSelector.addEventListener('change', (e) => {
         const chosen = e.target.value;
+        if (chosen === 'split-custom') {
+          this.typographyMode = 'split';
+          this.persistTypographySettings();
+          this.syncTypographyInputsFromState();
+          this.applyTranslationTypography();
+          const hLabel = TRANSLATION_FONT_PRESETS[this.headingFont]?.label || 'Inter';
+          const bLabel = TRANSLATION_FONT_PRESETS[this.bodyFont]?.label || 'Georgia';
+          this.showToast(`Đã bật phối riêng: Heading ${hLabel} + Body ${bLabel}`, 'info');
+          return;
+        }
         if (chosen === 'custom' && !this.isValidCustomFontFamily(this.customFontFamily)) {
+          this.typographyMode = 'unified';
           this.pendingFontPreference = 'custom';
           this.openSettings();
           this.fontPreferenceInput.value = 'custom';
-          this.updateCustomFontFamilyVisibility();
+          this.syncTypographyInputsFromState();
           this.customFontFamilyInput?.focus();
           return;
         }
+        this.typographyMode = 'unified';
         this.fontPreference = chosen;
         this.pendingFontPreference = chosen;
-        if (this.fontPreferenceInput) this.fontPreferenceInput.value = chosen;
         localStorage.setItem('layouttrans_font_preference', chosen);
+        this.persistTypographySettings();
+        this.syncTypographyInputsFromState();
         this.applyTranslationTypography(chosen);
         const resolved = this.resolveTranslationFont(chosen);
-        this.showToast(`Đã lưu font chữ: ${resolved.label}`, 'info');
+        this.showToast(`Đã lưu 1 font đồng bộ toàn bài: ${resolved.label}`, 'info');
       });
     }
 
@@ -961,20 +1148,28 @@ class LayoutTransApp {
       const [iy0, ix0, iy1, ix1] = item.bbox;
       const cy = (iy0 + iy1) / 2;
       const cx = (ix0 + ix1) / 2;
-      return cy >= rawYMin - 35 && cy <= rawYMax + 35 && cx >= rawXMin - 35 && cx <= rawXMax + 35;
+      return cy >= rawYMin - 45 && cy <= rawYMax + 45 && cx >= rawXMin - 45 && cx <= rawXMax + 45;
     };
 
     const inBoxItems = items.filter(overlapsBbox);
     let rotatedCluster = inBoxItems.filter(item => item.rotation === 90 || item.rotation === 270);
     let rotatedChars = rotatedCluster.reduce((sum, item) => sum + item.text.length, 0);
 
-    // If rawBbox partially missed the rotated region on a page that clearly has a sideways table/figure, include nearby rotated items
-    if (rotatedChars < 30) {
-      const allPageRotated = items.filter(item => item.rotation === 90 || item.rotation === 270);
-      const allPageRotatedChars = allPageRotated.reduce((sum, item) => sum + item.text.length, 0);
-      if (allPageRotatedChars >= 60 && rotatedChars >= 10) {
-        rotatedCluster = allPageRotated;
-        rotatedChars = allPageRotatedChars;
+    // CRITICAL FIX: Always expand rotatedCluster across the full vertical span of the same X-band on this page!
+    // Even if rawBbox only covered half of a sideways table (e.g. y=410..890 instead of y=60..890),
+    // expanding to all rotated items in the same X-band guarantees the upper/right columns are never cut off.
+    const allPageRotated = items.filter(item => item.rotation === 90 || item.rotation === 270);
+    const allPageRotatedChars = allPageRotated.reduce((sum, item) => sum + item.text.length, 0);
+    if (allPageRotatedChars >= 40 && (rotatedChars >= 10 || explicitRotate === 90 || explicitRotate === 270)) {
+      const seedItems = rotatedCluster.length > 0 ? rotatedCluster : allPageRotated;
+      const seedXMin = Math.min(...seedItems.map(i => i.bbox[1]));
+      const seedXMax = Math.max(...seedItems.map(i => i.bbox[3]));
+      const bandRotated = allPageRotated.filter(i => (
+        i.bbox[3] >= seedXMin - 180 && i.bbox[1] <= seedXMax + 180
+      ));
+      if (bandRotated.length >= rotatedCluster.length) {
+        rotatedCluster = bandRotated;
+        rotatedChars = rotatedCluster.reduce((sum, item) => sum + item.text.length, 0);
       }
     }
 
@@ -996,14 +1191,15 @@ class LayoutTransApp {
         && i.bbox[2] >= rotYMin - 20
         && i.bbox[0] <= rotYMax + 20
       ));
+      // Only consider horizontal prose above/below if it is clearly outside [rotYMin, rotYMax]
       const topProse = horizontalProse.filter(i => (
-        i.bbox[2] <= rotYMin + 4
+        i.bbox[2] <= rotYMin - 2
         && i.bbox[3] >= rotXMin
         && i.bbox[1] <= rotXMax
         && !/^(table|figure|bảng|hình)\b/i.test(i.text)
       ));
       const bottomProse = horizontalProse.filter(i => (
-        i.bbox[0] >= rotYMax - 4
+        i.bbox[0] >= rotYMax + 2
         && i.bbox[3] >= rotXMin
         && i.bbox[1] <= rotXMax
         && !/^(table|figure|bảng|hình|note|this table)\b/i.test(i.text)
@@ -1011,29 +1207,31 @@ class LayoutTransApp {
 
       let refinedXMin = Math.max(0, rotXMin - 24);
       let refinedXMax = Math.min(1000, rotXMax + 24);
-      let refinedYMin = Math.max(0, Math.min(rawYMin, rotYMin) - 16);
-      let refinedYMax = Math.min(1000, Math.max(rawYMax, rotYMax) + 16);
+      let refinedYMin = Math.max(0, rotYMin - 22);
+      let refinedYMax = Math.min(1000, rotYMax + 22);
 
       if (rightColumnProse.length > 0) {
         const minRightX = Math.min(...rightColumnProse.map(i => i.bbox[1]));
-        refinedXMax = Math.min(refinedXMax, Math.max(rotXMax + 8, minRightX - 10));
+        refinedXMax = Math.min(refinedXMax, Math.max(rotXMax + 10, minRightX - 10));
       }
       if (leftColumnProse.length > 0) {
         const maxLeftX = Math.max(...leftColumnProse.map(i => i.bbox[3]));
-        refinedXMin = Math.max(refinedXMin, Math.min(rotXMin - 8, maxLeftX + 10));
+        refinedXMin = Math.max(refinedXMin, Math.min(rotXMin - 10, maxLeftX + 10));
       }
       if (topProse.length > 0) {
         const maxTopY = Math.max(...topProse.map(i => i.bbox[2]));
-        refinedYMin = Math.max(refinedYMin, Math.min(rotYMin - 6, maxTopY + 8));
-      } else {
-        refinedYMin = Math.max(0, rotYMin - 22);
+        refinedYMin = Math.max(refinedYMin, Math.min(rotYMin - 10, maxTopY + 6));
       }
       if (bottomProse.length > 0) {
         const minBottomY = Math.min(...bottomProse.map(i => i.bbox[0]));
-        refinedYMax = Math.min(refinedYMax, Math.max(rotYMax + 6, minBottomY - 8));
-      } else {
-        refinedYMax = Math.min(1000, rotYMax + 22);
+        refinedYMax = Math.min(refinedYMax, Math.max(rotYMax + 10, minBottomY - 6));
       }
+
+      // Never allow refinedYMin/refinedYMax/refinedXMin/refinedXMax to clip inside rotCluster bounds
+      refinedYMin = Math.min(refinedYMin, Math.max(0, rotYMin - 10));
+      refinedYMax = Math.max(refinedYMax, Math.min(1000, rotYMax + 10));
+      refinedXMin = Math.min(refinedXMin, Math.max(0, rotXMin - 10));
+      refinedXMax = Math.max(refinedXMax, Math.min(1000, rotXMax + 10));
 
       const chars90 = rotatedCluster
         .filter(i => i.rotation === 90)
@@ -1117,42 +1315,98 @@ class LayoutTransApp {
 
     if (preference === 'auto') {
       const type = this.sourceTypography || 'serif';
-      return TRANSLATION_FONT_PRESETS[type === 'serif' ? 'times-new-roman' : 'be-vietnam-pro'];
+      return TRANSLATION_FONT_PRESETS[type === 'serif' ? 'georgia' : 'inter'];
     }
 
-    return TRANSLATION_FONT_PRESETS[preference] || TRANSLATION_FONT_PRESETS['times-new-roman'];
+    return TRANSLATION_FONT_PRESETS[preference] || TRANSLATION_FONT_PRESETS['georgia'];
+  }
+
+  resolveActiveTypographyRoles(unifiedPref = this.fontPreference) {
+    if (this.typographyMode === 'split') {
+      const heading = TRANSLATION_FONT_PRESETS[this.headingFont] || TRANSLATION_FONT_PRESETS.inter;
+      const body = TRANSLATION_FONT_PRESETS[this.bodyFont] || TRANSLATION_FONT_PRESETS.georgia;
+      const caption = TRANSLATION_FONT_PRESETS[this.captionFont] || TRANSLATION_FONT_PRESETS.georgia;
+      return {
+        mode: 'split',
+        heading,
+        body,
+        caption,
+        captionItalic: Boolean(this.captionItalic),
+        summaryLabel: `Heading ${heading.label} + Body ${body.label}`
+      };
+    }
+    const unified = this.resolveTranslationFont(unifiedPref);
+    return {
+      mode: 'unified',
+      heading: unified,
+      body: unified,
+      caption: unified,
+      captionItalic: Boolean(this.captionItalic),
+      summaryLabel: `${unified.label} (Toàn bộ tài liệu)`
+    };
+  }
+
+  resetTypographyToDefaults() {
+    this.typographyMode = DEFAULT_TYPOGRAPHY_CONFIG.typographyMode;
+    this.headingFont = DEFAULT_TYPOGRAPHY_CONFIG.headingFont;
+    this.bodyFont = DEFAULT_TYPOGRAPHY_CONFIG.bodyFont;
+    this.captionFont = DEFAULT_TYPOGRAPHY_CONFIG.captionFont;
+    this.captionItalic = DEFAULT_TYPOGRAPHY_CONFIG.captionItalic;
+    this.h1Size = DEFAULT_TYPOGRAPHY_CONFIG.h1Size;
+    this.h2Size = DEFAULT_TYPOGRAPHY_CONFIG.h2Size;
+    this.h3Size = DEFAULT_TYPOGRAPHY_CONFIG.h3Size;
+    this.fontSize = DEFAULT_TYPOGRAPHY_CONFIG.bodySize;
+    this.captionSize = DEFAULT_TYPOGRAPHY_CONFIG.captionSize;
+    this.persistTypographySettings();
+    this.syncTypographyInputsFromState();
+    this.applyTranslationTypography();
+    this.showToast('✨ Đã khôi phục bộ font khuyên dùng (Heading Inter + Body Georgia + Mô tả hình chữ nghiêng)!', 'success');
   }
 
   applyTranslationTypography(preference = this.fontPreference) {
-    const font = this.resolveTranslationFont(preference);
-    this.documentTypography = font.type;
-    this.documentFontFamily = font.css;
+    const roles = this.resolveActiveTypographyRoles(preference);
+    this.documentTypography = roles.body.type;
+    this.documentFontFamily = roles.body.css;
 
-    document.documentElement.style.setProperty('--translation-font-family', font.css);
+    const captionStyle = roles.captionItalic ? 'italic' : 'normal';
+    const printH1Pt = +(14 * (this.h1Size / 26)).toFixed(2);
+    const printH2Pt = +(11 * (this.h2Size / 20)).toFixed(2);
+    const printH3Pt = +(9.8 * (this.h3Size / 17)).toFixed(2);
+    const printBodyPt = +(9.2 * (this.fontSize / 16)).toFixed(2);
+    const printCaptionPt = +(8.5 * (this.captionSize / 14)).toFixed(2);
+
+    const targets = [document.documentElement, this.translatedContent].filter(Boolean);
+    targets.forEach(el => {
+      el.style.setProperty('--translation-font-family', roles.body.css);
+      el.style.setProperty('--heading-font-family', roles.heading.css);
+      el.style.setProperty('--body-font-family', roles.body.css);
+      el.style.setProperty('--caption-font-family', roles.caption.css);
+      el.style.setProperty('--caption-font-style', captionStyle);
+      el.style.setProperty('--h1-font-size', `${this.h1Size}px`);
+      el.style.setProperty('--h2-font-size', `${this.h2Size}px`);
+      el.style.setProperty('--h3-font-size', `${this.h3Size}px`);
+      el.style.setProperty('--reader-font-size', `${this.fontSize}px`);
+      el.style.setProperty('--caption-font-size', `${this.captionSize}px`);
+      el.style.setProperty('--print-h1-size', `${printH1Pt}pt`);
+      el.style.setProperty('--print-h2-size', `${printH2Pt}pt`);
+      el.style.setProperty('--print-h3-size', `${printH3Pt}pt`);
+      el.style.setProperty('--print-body-size', `${printBodyPt}pt`);
+      el.style.setProperty('--print-caption-size', `${printCaptionPt}pt`);
+    });
 
     if (this.translatedContent) {
-      this.translatedContent.style.setProperty('--translation-font-family', font.css);
-      this.translatedContent.classList.toggle('source-type-serif', font.type === 'serif');
-      this.translatedContent.classList.toggle('source-type-sans', font.type === 'sans');
+      this.translatedContent.classList.toggle('source-type-serif', roles.body.type === 'serif');
+      this.translatedContent.classList.toggle('source-type-sans', roles.body.type === 'sans');
       this.translatedContent.dataset.sourceTypography = this.sourceTypography || 'pending';
-      this.translatedContent.dataset.translationFont = font.label;
+      this.translatedContent.dataset.translationFont = roles.summaryLabel;
     }
 
-    if (this.quickFontSelector && this.quickFontSelector.value !== preference) {
-      this.quickFontSelector.value = preference;
-    }
-    if (this.fontPreferenceInput && this.fontPreferenceInput.value !== preference) {
-      this.fontPreferenceInput.value = preference;
-    }
+    this.syncTypographyInputsFromState();
 
     if (this.fontDetectionStatus) {
       const sourceStatus = this.sourceTypographySummary
         || (this.currentFile ? 'Đang phân tích font trong PDF...' : 'Tải PDF lên để tự nhận diện kiểu chữ của bản gốc.');
-      const selectionStatus = preference === 'auto'
-        ? `Tự chọn ${font.label} cho bản dịch.`
-        : preference === 'custom' && !this.isValidCustomFontFamily(this.customFontFamilyInput?.value || this.customFontFamily)
-          ? 'Nhập tên một font đã cài trên máy để xem trước.'
-          : `Font bản dịch đang lưu: ${font.label}.`;
+      const selectionStatus = `Đang áp dụng: ${roles.summaryLabel}.`;
       this.fontDetectionStatus.textContent = `${sourceStatus} ${selectionStatus}`;
     }
   }
@@ -1178,9 +1432,10 @@ class LayoutTransApp {
   changeFontSize(delta) {
     this.fontSize = Math.max(12, Math.min(28, this.fontSize + delta));
     localStorage.setItem('layouttrans_font_size', String(this.fontSize));
-    document.documentElement.style.setProperty('--reader-font-size', `${this.fontSize}px`);
+    if (this.bodySizeInput) this.bodySizeInput.value = String(this.fontSize);
     if (this.fontSizeDisplay) this.fontSizeDisplay.textContent = `${this.fontSize}px`;
-    this.showToast(`Đã lưu cỡ chữ đọc: ${this.fontSize}px`, 'info');
+    this.applyTranslationTypography();
+    this.showToast(`Đã lưu cỡ chữ nội dung (Body): ${this.fontSize}px`, 'info');
   }
 
   // ==================== Gemini Translation Engine ====================
@@ -2168,11 +2423,11 @@ QUY TẮC SỐ 3 — HÌNH MINH HỌA, BIỂU ĐỒ (CHARTS) VÀ SƠ ĐỒ (FIGU
          </table>
        </div>
      </div>
-  4. Bảng <table class="figure-translation-table"> PHẢI liệt kê và dịch ĐẦY ĐỦ 100% mọi tiêu đề biểu đồ, nhãn trục (X/Y), chú giải (legend), các ô/bước trong sơ đồ khối, mũi tên luồng, và các ghi chú (annotations/callouts) nằm bên trong hình sang tiếng Việt (sắp xếp khoa học từ trên xuống dưới, từ trái sang phải).
+  4. Bảng <table class="figure-translation-table"> PHẢI liệt kê và dịch ĐẦY ĐỦ 100% mọi tiêu đề biểu đồ, nhãn trục (X/Y), chú giải (legend), các ô/bước trong sơ đồ khối, mũi tên luồng, và các ghi chú (annotations/callouts) nằm bên trong hình sang tiếng Việt (sắp xếp khoa học từ trên xuống dưới, từ trái sang phải). TUYỆT ĐỐI KHÔNG được viết tắt bằng dấu "..." ở bất kỳ ô nào và KHÔNG được bỏ sót bất kỳ cột hay hàng nào của bảng/hình xoay dọc!
   5. Cuối cùng là <figcaption><strong>Hình ...:</strong> [Dịch đầy đủ 100% phần chú thích hình sang tiếng Việt]</figcaption>.
 
 QUY TẮC SỐ 4 — BẢNG DỮ LIỆU (TABLES) VÀ TÀI LIỆU THAM KHẢO (REFERENCES):
-- Với bảng dữ liệu (Table): dịch đầy đủ mọi tiêu đề cột, tiêu đề hàng và ô dữ liệu sang tiếng Việt trong <div class="table-scroll"><table><thead>...</thead><tbody>...</tbody></table></div>. Có thể kèm thêm <figure class="paper-figure source-table-image" data-page="N" data-bbox="[ymin,xmin,ymax,xmax]"><div class="figure-image-slot"></div><figcaption>...</figcaption></figure> nếu bảng phức tạp cần đối chiếu.
+- Với bảng dữ liệu (Table): dịch đầy đủ 100% mọi tiêu đề cột, tiêu đề hàng và ô dữ liệu sang tiếng Việt (tuyệt đối không rút gọn bằng "...") trong <div class="table-scroll"><table><thead>...</thead><tbody>...</tbody></table></div>. Có thể kèm thêm <figure class="paper-figure source-table-image" data-page="N" data-bbox="[ymin,xmin,ymax,xmax]"><div class="figure-image-slot"></div><figcaption>...</figcaption></figure> nếu bảng phức tạp hoặc in dọc cần đối chiếu.
 - Với phần Tài liệu tham khảo (References): giữ nguyên số thứ tự nguồn bằng <div class="references-section"><h2>Tài liệu tham khảo</h2><ol class="references-list" start="1"><li value="1">...</li></ol></div> (thay số start/value đúng với số thứ tự thật trên trang, giữ nguyên tên bài báo/tác giả gốc chuẩn trích dẫn quốc tế).
 ${this.customPrompt ? `\nYÊU CẦU VĂN PHONG & THUẬT NGỮ BỔ SUNG TỪ NGƯỜI DÙNG:\n${this.customPrompt}` : ''}
 ${qaCorrectionNotes ? `\nLẦN SỬA QA BẮT BUỘC — Kết quả trước bị hệ thống QA từ chối vì các lỗi sau. Hãy sửa triệt để:\n${qaCorrectionNotes}\n` : ''}
@@ -3099,12 +3354,38 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
     const nextRot = ((currentRot + deltaDeg) % 360 + 360) % 360;
     fig.dataset.rotate = String(nextRot);
 
+    this.refreshCroppedFigureImage(fig, pageNum, bbox, nextRot);
+  }
+
+  expandFigureCrop(fig, pageNum) {
+    if (!fig) return;
+    let bbox = null;
+    try {
+      const parsed = JSON.parse(fig.dataset.bbox || 'null');
+      if (Array.isArray(parsed) && parsed.length === 4) bbox = parsed;
+    } catch (e) {}
+    if (!bbox) return;
+
+    const [ymin, xmin, ymax, xmax] = bbox;
+    const expanded = [
+      Math.max(0, Math.round(ymin - 55)),
+      Math.max(0, Math.round(xmin - 40)),
+      Math.min(1000, Math.round(ymax + 55)),
+      Math.min(1000, Math.round(xmax + 40))
+    ];
+    fig.dataset.bbox = JSON.stringify(expanded);
+    const currentRot = parseInt(fig.dataset.rotate || '0', 10) || 0;
+    this.refreshCroppedFigureImage(fig, pageNum, expanded, currentRot);
+    this.showToast('📐 Đã mở rộng vùng cắt hình ra các phía!', 'info');
+  }
+
+  refreshCroppedFigureImage(fig, pageNum, bbox, rotationDeg) {
     const imgEl = fig.querySelector('img.original-cropped-figure');
     const pageWrapper = document.getElementById(`pdf-page-${pageNum}`);
     const previewCanvas = pageWrapper ? pageWrapper.querySelector('canvas') : null;
 
     if (previewCanvas && imgEl) {
-      const quickUrl = this.cropBboxFromCanvas(previewCanvas, bbox, nextRot);
+      const quickUrl = this.cropBboxFromCanvas(previewCanvas, bbox, rotationDeg);
       imgEl.src = quickUrl;
       if (this.activeLightboxFigure === fig && this.figureLightboxImg) {
         this.figureLightboxImg.src = quickUrl;
@@ -3113,7 +3394,7 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
 
     this.getHighResPageCanvas(pageNum, 3.0).then(highResCanvas => {
       if (highResCanvas && imgEl && imgEl.isConnected) {
-        const hiUrl = this.cropBboxFromCanvas(highResCanvas, bbox, nextRot);
+        const hiUrl = this.cropBboxFromCanvas(highResCanvas, bbox, rotationDeg);
         imgEl.src = hiUrl;
         if (this.activeLightboxFigure === fig && this.figureLightboxImg) {
           this.figureLightboxImg.src = hiUrl;
@@ -3276,12 +3557,15 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
               <img src="${initialDataUrl}" class="original-cropped-figure" alt="Hình gốc nét cao từ trang ${pageNum}" title="Bấm vào hình để phóng to độ phân giải cao (3x)" />
             </div>
             <div class="figure-action-bar">
-              ${refined.autoRotated ? '<span class="figure-auto-rotated-badge" title="Đã tự động cắt bỏ cột chữ thừa và xoay ngang hình bị dọc">✨ Đã tự cắt & xoay ngang 90°</span>' : ''}
+              ${refined.autoRotated ? '<span class="figure-auto-rotated-badge" title="Đã tự động lấy trọn vẹn toàn bộ cột của bảng/hình dọc và xoay ngang 90°">✨ Đã tự lấy đủ hình & xoay ngang 90°</span>' : ''}
               <button class="figure-rotate-btn figure-rotate-left-btn" type="button" title="Xoay hình ngược chiều kim đồng hồ 90°">
                 <span>↺ Xoay trái 90°</span>
               </button>
               <button class="figure-rotate-btn figure-rotate-right-btn" type="button" title="Xoay hình thuận chiều kim đồng hồ 90°">
                 <span>↻ Xoay phải 90°</span>
+              </button>
+              <button class="figure-rotate-btn figure-expand-crop-btn" type="button" title="Mở rộng thêm vùng cắt xung quanh hình nếu hình bị sát lề">
+                <span>📐 Mở rộng cắt</span>
               </button>
               <button class="figure-lightbox-btn" type="button" title="Phóng to hình nét cao kèm bảng dịch thành phần">
                 <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
@@ -3327,6 +3611,15 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
             e.preventDefault();
             e.stopPropagation();
             this.rotateFigureBy(fig, pageNum, 90);
+          });
+        }
+
+        const expandCropBtn = slot.querySelector('.figure-expand-crop-btn');
+        if (expandCropBtn) {
+          expandCropBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            this.expandFigureCrop(fig, pageNum);
           });
         }
 
@@ -3511,7 +3804,11 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
     if (!this.ensureExportReady('HTML')) return;
 
     const title = this.getExportBaseName();
-    const exportFontFamily = this.resolveTranslationFont().css;
+    const roles = this.resolveActiveTypographyRoles();
+    const headingCss = roles.heading.css;
+    const bodyCss = roles.body.css;
+    const captionCss = roles.caption.css;
+    const captionStyle = roles.captionItalic ? 'italic' : 'normal';
     const exportFontSize = this.fontSize || 16;
 
     // Assemble all chunks with embedded high-DPI cropped author figures
@@ -3547,7 +3844,7 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js" onload="renderMathInElement(document.body);"></script>
   <style>
     body {
-      font-family: ${exportFontFamily};
+      font-family: ${bodyCss};
       max-width: 940px;
       margin: 0 auto;
       padding: 3rem 1.5rem;
@@ -3556,10 +3853,11 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
       line-height: 1.68;
       font-size: ${exportFontSize}px;
     }
-    h1, h2, h3, h4, p, li, td, th, figcaption { font-family: ${exportFontFamily}; }
-    h1 { font-size: 2rem; color: #0f172a; margin: 2rem 0 1rem; }
-    h2 { font-size: 1.5rem; color: #0f172a; margin: 1.5rem 0 0.8rem; border-bottom: 2px solid #e2e8f0; padding-bottom: 0.4rem; }
-    h3 { font-size: 1.25rem; color: #0f172a; margin: 1.2rem 0 0.6rem; }
+    p, li, td, th { font-family: ${bodyCss}; font-size: ${exportFontSize}px; }
+    h1, h2, h3, h4, .abstract-title, .callout-title { font-family: ${headingCss}; }
+    h1 { font-size: ${this.h1Size}px; color: #0f172a; margin: 2rem 0 1rem; }
+    h2 { font-size: ${this.h2Size}px; color: #0f172a; margin: 1.5rem 0 0.8rem; border-bottom: 2px solid #e2e8f0; padding-bottom: 0.4rem; }
+    h3 { font-size: ${this.h3Size}px; color: #0f172a; margin: 1.2rem 0 0.6rem; }
     p { margin-bottom: 1.2rem; text-align: justify; }
     .authors-block { margin: 1.5rem 0 2rem; padding: 0.5rem 0; display: flex; flex-direction: column; gap: 0.45rem; }
     .author-row { display: flex; justify-content: flex-start; align-items: baseline; gap: 2rem; padding: 3px 0; font-size: 0.94rem; }
@@ -3580,10 +3878,11 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
     .cropped-figure-stage { position: relative; width: 100%; line-height: 0; }
     .original-cropped-figure { display: block; width: 100%; max-width: 100%; height: auto; border-radius: 4px; }
     .paper-figure > .figure-label-overlays, .figure-wrapper > .figure-label-overlays, .figure-label-overlay-layer, .translated-figure-label { display: none !important; }
-    figcaption, .figure-caption { font-size: 0.9rem; color: #334155; line-height: 1.6; text-align: justify; margin: 0.8rem 0; }
+    figcaption, .figure-caption { font-family: ${captionCss}; font-style: ${captionStyle}; font-size: ${this.captionSize}px; color: #334155; line-height: 1.6; text-align: justify; margin: 0.8rem 0; }
+    figcaption strong { font-style: normal; }
     .figure-translation-box { margin-top: 0.9rem; border: 1px solid #cbd5e1; border-radius: 8px; overflow: hidden; background: #ffffff; }
-    .figure-translation-header { padding: 8px 14px; background: #f1f5f9; border-bottom: 1px solid #cbd5e1; font-size: 0.85rem; font-weight: 700; color: #1e293b; }
-    .figure-translation-table { width: 100%; border-collapse: collapse; font-size: 0.86rem; line-height: 1.5; }
+    .figure-translation-header { font-family: ${headingCss}; padding: 8px 14px; background: #f1f5f9; border-bottom: 1px solid #cbd5e1; font-size: 0.85rem; font-weight: 700; color: #1e293b; }
+    .figure-translation-table { width: 100%; border-collapse: collapse; font-size: ${Math.max(11, this.captionSize - 1)}px; line-height: 1.5; }
     .figure-translation-table th { background: #f8fafc; color: #334155; font-weight: 700; padding: 8px 12px; border-bottom: 1.5px solid #cbd5e1; font-size: 0.82rem; }
     .figure-translation-table td { padding: 8px 12px; border-bottom: 1px solid #e2e8f0; vertical-align: top; }
     .figure-translation-table tbody tr:nth-child(even) { background: #f8fafc; }
@@ -3592,17 +3891,18 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
     .fig-vi-cell { width: 46%; color: #0f172a; font-weight: 500; }
     .references-list { font-size: 0.82rem; line-height: 1.35; }
     .reference-entries { column-count: 2; column-gap: 1.25rem; column-rule: 1px solid #e2e8f0; font-size: 0.82rem; line-height: 1.35; }
-    .reference-entry { position: relative; padding-left: 2.35rem; margin: 0 0 0.42rem; break-inside: avoid-column; overflow-wrap: anywhere; }
+    .reference-entry { position: relative; padding-left: 2.35rem; margin: 0 0 0.42rem; break-inside: avoid-column; page-break-inside: avoid; overflow-wrap: anywhere; }
     .reference-number { position: absolute; top: 0; left: 0; width: 2rem; font-variant-numeric: tabular-nums; text-align: right; }
     .reference-text { display: inline; }
     @media print {
       @page { size: A4; margin: 1.4cm 1.3cm; }
-      body { max-width: none; margin: 0; padding: 0; background: #fff; color: #111; font-size: 9.2pt; line-height: 1.38; }
+      body { max-width: none; margin: 0; padding: 0; background: #fff; color: #111; font-size: ${+(9.2 * (this.fontSize / 16)).toFixed(2)}pt; line-height: 1.38; }
       .layout-2col { gap: 1.05rem; }
       .table-scroll { overflow: visible; margin: 0.45rem 0; }
       .table-scroll table { width: 100%; min-width: 0; }
-      .paper-figure { break-inside: auto; margin: 0.8rem 0; padding: 0.6rem; }
-      .original-cropped-figure { width: 100%; max-height: none; object-fit: contain; }
+      .paper-figure { break-inside: auto; page-break-inside: auto; margin: 0.55rem 0; padding: 0.4rem 0; }
+      .figure-image-slot { break-inside: avoid; page-break-inside: avoid; }
+      .original-cropped-figure { width: 100%; max-height: 11.5cm; object-fit: contain; }
       .figure-translation-table { font-size: 7.8pt; line-height: 1.3; }
       .figure-translation-table th, .figure-translation-table td { padding: 4pt 6pt; }
       table { break-inside: auto; }
@@ -3610,7 +3910,7 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
       .references-section { margin: 0.25rem 0 0; padding-top: 0; border-top: 0; break-inside: auto; page-break-inside: auto; }
       .references-section h2, .references-section h3 { margin: 0.35rem 0 0.3rem; font-size: 10pt; }
       .reference-entries { column-count: 2; column-gap: 1rem; column-rule: 0.35pt solid #cbd5e1; font-size: 7.8pt; line-height: 1.24; }
-      .reference-entry { margin-bottom: 2.5pt; padding-left: 2.15rem; break-inside: auto; page-break-inside: auto; }
+      .reference-entry { margin-bottom: 2.5pt; padding-left: 2.15rem; break-inside: avoid-column; page-break-inside: avoid; }
     }
   </style>
 </head>
@@ -3631,12 +3931,12 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
       const title = this.getExportBaseName();
 
       const { Document, Packer, Paragraph, TextRun, HeadingLevel, Table, TableRow, TableCell, WidthType } = docx;
-      const selectedFont = this.resolveTranslationFont();
-      const makeTextRun = (text, opts = {}) => new TextRun({ text: String(text || ''), font: selectedFont.docx, ...opts });
+      const roles = this.resolveActiveTypographyRoles();
+      const makeTextRun = (text, opts = {}) => new TextRun({ text: String(text || ''), font: opts.font || roles.body.docx, ...opts });
 
       const docChildren = [
         new Paragraph({
-          children: [makeTextRun(`${title} — Bản Dịch Tiếng Việt`, { bold: true })],
+          children: [makeTextRun(`${title} — Bản Dịch Tiếng Việt`, { bold: true, font: roles.heading.docx })],
           heading: HeadingLevel.TITLE
         }),
         new Paragraph({ text: "" })
@@ -3646,7 +3946,7 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
         if (c.status === 'completed') {
           docChildren.push(
             new Paragraph({
-              children: [makeTextRun(`--- Trang ${c.startPage}${c.endPage !== c.startPage ? ` – ${c.endPage}` : ''} ---`, { bold: true })],
+              children: [makeTextRun(`--- Trang ${c.startPage}${c.endPage !== c.startPage ? ` – ${c.endPage}` : ''} ---`, { bold: true, font: roles.heading.docx })],
               heading: HeadingLevel.HEADING_3
             })
           );
@@ -3665,7 +3965,10 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
                   new TableCell({
                     children: [
                       new Paragraph({
-                        children: [makeTextRun(cell.textContent.trim(), { bold: cell.tagName === 'TH' || rowIndex === 0 })]
+                        children: [makeTextRun(cell.textContent.trim(), {
+                          bold: cell.tagName === 'TH' || rowIndex === 0,
+                          font: (cell.tagName === 'TH' || rowIndex === 0) ? roles.heading.docx : roles.body.docx
+                        })]
                       })
                     ]
                   })
@@ -3689,13 +3992,23 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
             if (!text) return;
 
             let heading = undefined;
+            const isHeading = el.tagName === 'H1' || el.tagName === 'H2' || el.tagName === 'H3';
             if (el.tagName === 'H1') heading = HeadingLevel.HEADING_1;
             if (el.tagName === 'H2') heading = HeadingLevel.HEADING_2;
             if (el.tagName === 'H3') heading = HeadingLevel.HEADING_3;
 
+            const roleFont = isHeading
+              ? roles.heading.docx
+              : el.tagName === 'FIGCAPTION'
+                ? roles.caption.docx
+                : roles.body.docx;
+
             docChildren.push(
               new Paragraph({
-                children: [makeTextRun(text, { italics: el.tagName === 'FIGCAPTION' })],
+                children: [makeTextRun(text, {
+                  font: roleFont,
+                  italics: el.tagName === 'FIGCAPTION' ? roles.captionItalic : false
+                })],
                 heading: heading
               })
             );
@@ -3806,9 +4119,7 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
     this.chunkSizeInput.value = this.chunkSize;
     this.chunkSizeDisplay.textContent = `${this.chunkSize} trang`;
     this.pendingFontPreference = this.fontPreference;
-    this.fontPreferenceInput.value = this.fontPreference;
-    this.customFontFamilyInput.value = this.customFontFamily;
-    this.updateCustomFontFamilyVisibility();
+    this.syncTypographyInputsFromState();
     this.applyTranslationTypography(this.pendingFontPreference);
     this.customPromptInput.value = this.customPrompt;
 
@@ -3826,10 +4137,7 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
 
   closeSettings() {
     this.pendingFontPreference = this.fontPreference;
-    if (this.fontPreferenceInput) this.fontPreferenceInput.value = this.fontPreference;
-    if (this.quickFontSelector) this.quickFontSelector.value = this.fontPreference;
-    if (this.customFontFamilyInput) this.customFontFamilyInput.value = this.customFontFamily;
-    this.updateCustomFontFamilyVisibility();
+    this.syncTypographyInputsFromState();
     this.applyTranslationTypography(this.fontPreference);
     this.settingsModal.style.display = 'none';
   }
@@ -3837,7 +4145,7 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
   saveSettings() {
     const nextFontPreference = this.fontPreferenceInput.value;
     const nextCustomFontFamily = this.customFontFamilyInput.value.trim();
-    if (nextFontPreference === 'custom' && !this.isValidCustomFontFamily(nextCustomFontFamily)) {
+    if (this.typographyMode === 'unified' && nextFontPreference === 'custom' && !this.isValidCustomFontFamily(nextCustomFontFamily)) {
       this.showToast('Nhập tên font hợp lệ đã cài trên máy (tối đa 64 ký tự).', 'warning');
       this.customFontFamilyInput.focus();
       return;
@@ -3847,14 +4155,31 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
     this.apiKey = key;
     localStorage.setItem('layouttrans_gemini_key', key);
 
+    if (this.typographyModeSelect) {
+      this.typographyMode = this.typographyModeSelect.value === 'unified' ? 'unified' : 'split';
+    }
+    if (this.headingFontInput) this.headingFont = this.headingFontInput.value;
+    if (this.bodyFontInput) this.bodyFont = this.bodyFontInput.value;
+    if (this.captionFontInput) this.captionFont = this.captionFontInput.value;
+    if (this.captionItalicInput) this.captionItalic = Boolean(this.captionItalicInput.checked);
+
+    const clampSize = (el, min, max, fallback) => {
+      const parsed = parseInt(el?.value || '', 10);
+      return Number.isFinite(parsed) ? Math.max(min, Math.min(max, parsed)) : fallback;
+    };
+    this.h1Size = clampSize(this.h1SizeInput, 18, 40, this.h1Size);
+    this.h2Size = clampSize(this.h2SizeInput, 15, 32, this.h2Size);
+    this.h3Size = clampSize(this.h3SizeInput, 13, 26, this.h3Size);
+    this.fontSize = clampSize(this.bodySizeInput, 12, 28, this.fontSize);
+    this.captionSize = clampSize(this.captionSizeInput, 11, 22, this.captionSize);
+
     this.fontPreference = nextFontPreference;
     this.pendingFontPreference = nextFontPreference;
     this.customFontFamily = nextCustomFontFamily;
     localStorage.setItem('layouttrans_font_preference', this.fontPreference);
     localStorage.setItem('layouttrans_custom_font_family', this.customFontFamily);
-    if (this.quickFontSelector) {
-      this.quickFontSelector.value = this.fontPreference;
-    }
+    this.persistTypographySettings();
+    this.syncTypographyInputsFromState();
     this.applyTranslationTypography(this.fontPreference);
 
     const previousChunkSize = this.chunkSize;
@@ -3880,7 +4205,8 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
 
     this.updateApiKeyStatus();
     this.closeSettings();
-    this.showToast(`Đã lưu toàn bộ cài đặt (Font: ${this.resolveTranslationFont().label}, Cỡ chữ: ${this.fontSize}px, ${this.chunkSize} trang/lần)!`, 'success');
+    const roles = this.resolveActiveTypographyRoles();
+    this.showToast(`Đã lưu toàn bộ cài đặt (${roles.summaryLabel}, Body ${this.fontSize}px, ${this.chunkSize} trang/lần)!`, 'success');
   }
 
   updateApiKeyStatus() {

@@ -27,7 +27,7 @@
   <!-- Docx.js for exporting to Word -->
   <script src="https://cdn.jsdelivr.net/npm/docx@8.5.0/build/index.umd.js"></script>
 
-  <link rel="stylesheet" href="style.css?v=1.7.2">
+  <link rel="stylesheet" href="style.css?v=1.8.0">
 </head>
 <body>
   <!-- Header / Navigation Bar -->
@@ -253,23 +253,24 @@
             <span>Bản dịch Tiếng Việt (Reflow học thuật)</span>
           </div>
           <div class="pane-controls">
-            <div class="quick-font-wrap" title="Đổi nhanh Font chữ bản dịch (Tự động nhớ)">
+            <div class="quick-font-wrap" title="Đổi nhanh chế độ Font chữ bản dịch (Tự động nhớ)">
               <select id="quickFontSelector" class="quick-font-select" aria-label="Chọn font chữ bản dịch">
-                <option value="auto">🔤 Font: Tự động</option>
-                <optgroup label="Font có chân (Serif)">
-                  <option value="times-new-roman">Times New Roman</option>
+                <option value="split-custom" selected>✨ Phối riêng: Heading Inter + Body Georgia</option>
+                <option value="auto">🔤 Đồng bộ 1 Font: Tự động theo gốc</option>
+                <optgroup label="Đồng bộ 1 Font có chân (Serif)">
+                  <option value="georgia">Georgia</option>
                   <option value="merriweather">Merriweather</option>
                   <option value="lora">Lora</option>
-                  <option value="georgia">Georgia</option>
+                  <option value="times-new-roman">Times New Roman</option>
                   <option value="palatino">Palatino</option>
                   <option value="charter">Charter</option>
                 </optgroup>
-                <optgroup label="Font không chân (Sans-serif)">
-                  <option value="be-vietnam-pro">Be Vietnam Pro</option>
+                <optgroup label="Đồng bộ 1 Font không chân (Sans-serif)">
                   <option value="inter">Inter</option>
+                  <option value="be-vietnam-pro">Be Vietnam Pro</option>
                   <option value="arial">Arial</option>
                 </optgroup>
-                <option value="custom">Tùy chỉnh...</option>
+                <option value="custom">⚙️ Tùy chỉnh chi tiết Font & Cỡ chữ...</option>
               </select>
             </div>
             <div class="divider"></div>
@@ -335,32 +336,164 @@
           <div id="apiKeyTestResult" class="api-test-result" style="display: none;"></div>
         </div>
 
-        <div class="form-group">
-          <label for="fontPreferenceInput">Font chữ bản dịch (Tự động ghi nhớ)</label>
+        <div class="form-group typography-studio-group">
+          <div class="label-row">
+            <label for="typographyModeSelect">Kiểu phối Font chữ & Cỡ chữ (Tự động ghi nhớ)</label>
+            <button type="button" class="btn btn-xs btn-outline" id="resetTypographyBtn" title="Khôi phục bộ mặc định: Heading Inter, Body Georgia, Caption Georgia nghiêng & cỡ chữ chuẩn">↺ Mặc định chuẩn</button>
+          </div>
           <div class="select-wrapper settings-select-wrapper">
-            <select id="fontPreferenceInput">
-              <option value="auto">Tự nhận diện theo bản gốc</option>
-              <optgroup label="Font có chân (Serif)">
-                <option value="times-new-roman">Times New Roman</option>
-                <option value="merriweather">Merriweather</option>
-                <option value="lora">Lora</option>
-                <option value="georgia">Georgia</option>
-                <option value="palatino">Palatino</option>
-                <option value="charter">Charter</option>
-              </optgroup>
-              <optgroup label="Font không chân (Sans-serif)">
-                <option value="be-vietnam-pro">Be Vietnam Pro</option>
-                <option value="inter">Inter</option>
-                <option value="arial">Arial</option>
-              </optgroup>
-              <option value="custom">Tùy chỉnh bằng tên font đã cài trên máy</option>
+            <select id="typographyModeSelect">
+              <option value="split" selected>✨ Phối riêng từng phần: Tiêu đề (Heading) / Nội dung (Body) / Mô tả hình (Khuyên dùng)</option>
+              <option value="unified">🔤 Dùng chung 1 Font đồng nhất cho toàn bộ tài liệu</option>
             </select>
           </div>
+
+          <!-- Mode 1: Split Font Controls (Heading vs Body vs Caption) -->
+          <div id="splitTypographyBox" class="typography-subbox">
+            <div class="typography-role-grid">
+              <div class="typography-role-item">
+                <label for="headingFontInput">1. Font Tiêu đề (Heading 1, 2, 3)</label>
+                <select id="headingFontInput">
+                  <optgroup label="Font không chân hiện đại (Khuyên dùng cho Heading)">
+                    <option value="inter" selected>Inter (Hiện đại, sắc nét — Mặc định)</option>
+                    <option value="be-vietnam-pro">Be Vietnam Pro</option>
+                    <option value="arial">Arial</option>
+                  </optgroup>
+                  <optgroup label="Font có chân học thuật (Serif)">
+                    <option value="georgia">Georgia</option>
+                    <option value="merriweather">Merriweather</option>
+                    <option value="lora">Lora</option>
+                    <option value="palatino">Palatino</option>
+                    <option value="charter">Charter</option>
+                    <option value="times-new-roman">Times New Roman</option>
+                  </optgroup>
+                  <option value="custom">Font tự nhập trên máy...</option>
+                </select>
+              </div>
+
+              <div class="typography-role-item">
+                <label for="bodyFontInput">2. Font Nội dung chính (Body text & Bảng)</label>
+                <select id="bodyFontInput">
+                  <optgroup label="Font có chân dễ đọc dài (Khuyên dùng cho Body)">
+                    <option value="georgia" selected>Georgia (Ấm áp, dễ đọc — Mặc định)</option>
+                    <option value="merriweather">Merriweather</option>
+                    <option value="lora">Lora</option>
+                    <option value="palatino">Palatino</option>
+                    <option value="charter">Charter</option>
+                    <option value="times-new-roman">Times New Roman</option>
+                  </optgroup>
+                  <optgroup label="Font không chân (Sans-serif)">
+                    <option value="inter">Inter</option>
+                    <option value="be-vietnam-pro">Be Vietnam Pro</option>
+                    <option value="arial">Arial</option>
+                  </optgroup>
+                  <option value="custom">Font tự nhập trên máy...</option>
+                </select>
+              </div>
+
+              <div class="typography-role-item">
+                <label for="captionFontInput">3. Font Mô tả hình & Chú thích (Caption)</label>
+                <div class="caption-font-row">
+                  <select id="captionFontInput">
+                    <optgroup label="Font có chân (Serif)">
+                      <option value="georgia" selected>Georgia (Mặc định)</option>
+                      <option value="merriweather">Merriweather</option>
+                      <option value="lora">Lora</option>
+                      <option value="palatino">Palatino</option>
+                      <option value="charter">Charter</option>
+                      <option value="times-new-roman">Times New Roman</option>
+                    </optgroup>
+                    <optgroup label="Font không chân (Sans-serif)">
+                      <option value="inter">Inter</option>
+                      <option value="be-vietnam-pro">Be Vietnam Pro</option>
+                      <option value="arial">Arial</option>
+                    </optgroup>
+                    <option value="custom">Font tự nhập trên máy...</option>
+                  </select>
+                  <label class="italic-toggle-label" title="In nghiêng phần mô tả dưới hình (Figcaption)">
+                    <input type="checkbox" id="captionItalicInput" checked>
+                    <span><em>Chữ nghiêng (Italic)</em></span>
+                  </label>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Mode 2: Unified Single Font -->
+          <div id="unifiedTypographyBox" class="typography-subbox" style="display: none;">
+            <label for="fontPreferenceInput">Chọn 1 Font áp dụng cho toàn bộ bài</label>
+            <div class="select-wrapper settings-select-wrapper">
+              <select id="fontPreferenceInput">
+                <option value="auto">Tự nhận diện theo bản gốc</option>
+                <optgroup label="Font có chân (Serif)">
+                  <option value="georgia">Georgia</option>
+                  <option value="merriweather">Merriweather</option>
+                  <option value="lora">Lora</option>
+                  <option value="times-new-roman">Times New Roman</option>
+                  <option value="palatino">Palatino</option>
+                  <option value="charter">Charter</option>
+                </optgroup>
+                <optgroup label="Font không chân (Sans-serif)">
+                  <option value="inter">Inter</option>
+                  <option value="be-vietnam-pro">Be Vietnam Pro</option>
+                  <option value="arial">Arial</option>
+                </optgroup>
+                <option value="custom">Tùy chỉnh bằng tên font đã cài trên máy</option>
+              </select>
+            </div>
+          </div>
+
           <div class="form-group custom-font-family-row" id="customFontFamilyRow" style="display:none;">
-            <label for="customFontFamilyInput">Tên font trên máy</label>
+            <label for="customFontFamilyInput">Tên font trên máy (khi chọn "Font tự nhập trên máy")</label>
             <input type="text" id="customFontFamilyInput" maxlength="64" placeholder="Ví dụ: Aptos, Garamond, Bookerly">
           </div>
-          <small class="help-text" id="fontDetectionStatus">Tải PDF lên để tự nhận diện kiểu chữ của bản gốc.</small>
+
+          <!-- Custom Sizes per Role -->
+          <div class="typography-size-panel">
+            <div class="typography-size-header">
+              <span>📏 Tùy chỉnh cỡ chữ từng thành phần (px)</span>
+              <small>Tự động quy đổi tỷ lệ tương ứng khi Xuất/In PDF & Word</small>
+            </div>
+            <div class="typography-size-grid">
+              <div class="size-control-item">
+                <label for="h1SizeInput">Heading 1 (Tên bài)</label>
+                <div class="size-input-wrap">
+                  <input type="number" id="h1SizeInput" min="18" max="40" value="26" step="1">
+                  <span>px</span>
+                </div>
+              </div>
+              <div class="size-control-item">
+                <label for="h2SizeInput">Heading 2 (Mục lớn)</label>
+                <div class="size-input-wrap">
+                  <input type="number" id="h2SizeInput" min="15" max="32" value="20" step="1">
+                  <span>px</span>
+                </div>
+              </div>
+              <div class="size-control-item">
+                <label for="h3SizeInput">Heading 3 (Mục nhỏ)</label>
+                <div class="size-input-wrap">
+                  <input type="number" id="h3SizeInput" min="13" max="26" value="17" step="1">
+                  <span>px</span>
+                </div>
+              </div>
+              <div class="size-control-item">
+                <label for="bodySizeInput">Body (Nội dung chính)</label>
+                <div class="size-input-wrap">
+                  <input type="number" id="bodySizeInput" min="12" max="28" value="16" step="1">
+                  <span>px</span>
+                </div>
+              </div>
+              <div class="size-control-item">
+                <label for="captionSizeInput">Mô tả hình & Bảng phụ</label>
+                <div class="size-input-wrap">
+                  <input type="number" id="captionSizeInput" min="11" max="22" value="14" step="1">
+                  <span>px</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <small class="help-text" id="fontDetectionStatus">Đang dùng: Tiêu đề Inter • Nội dung Georgia • Mô tả hình Georgia (Nghiêng).</small>
         </div>
 
         <div class="form-group">
@@ -420,6 +553,6 @@
   <div class="toast-container" id="toastContainer"></div>
 
   <!-- Application Logic -->
-  <script src="app.js?v=1.7.2"></script>
+  <script src="app.js?v=1.8.0"></script>
 </body>
 </html>
