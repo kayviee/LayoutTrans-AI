@@ -1834,8 +1834,11 @@ ol.references {
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-xl);
-  width: 90%;
-  max-width: 520px;
+  width: 92%;
+  max-width: 620px;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
   box-shadow: var(--shadow-lg);
   overflow: hidden;
   animation: slideUp 0.25s ease;
@@ -1897,10 +1900,11 @@ ol.references {
 }
 
 .modal-body {
-  padding: 1.5rem;
+  padding: 1.35rem 1.5rem;
   display: flex;
   flex-direction: column;
-  gap: 1.25rem;
+  gap: 1.15rem;
+  overflow-y: auto;
 }
 
 .form-group {
@@ -1913,6 +1917,20 @@ ol.references {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.prompt-preset-group {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.prompt-preset-btn {
+  font-size: 0.72rem;
+  padding: 3px 8px;
 }
 
 .form-group label {

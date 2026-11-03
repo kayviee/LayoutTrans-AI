@@ -373,8 +373,16 @@
 
         <!-- Translation Style Prompt Override -->
         <div class="form-group">
-          <label for="customPromptInput">Chỉ thị văn phong & Thuật ngữ bổ sung (Tự động lưu)</label>
-          <textarea id="customPromptInput" rows="3" placeholder="Ví dụ: Giữ nguyên thuật ngữ viết tắt trong ngoặc đơn, dịch theo văn phong học thuật chuẩn, xưng hô tác giả là 'chúng tôi'..."></textarea>
+          <div class="label-row">
+            <label for="customPromptInput">Chỉ thị văn phong & Thuật ngữ bổ sung (Tự động lưu)</label>
+            <div class="prompt-preset-group">
+              <button type="button" class="btn btn-xs btn-outline prompt-preset-btn" data-preset="newbie" title="Dịch dễ hiểu cho người mới bắt đầu nghiên cứu, giữ thuật ngữ tiếng Anh trong ngoặc kèm giải thích ngắn">🌱 Người mới nghiên cứu (Khuyên dùng)</button>
+              <button type="button" class="btn btn-xs btn-outline prompt-preset-btn" data-preset="academic" title="Văn phong học thuật chuẩn, giữ thuật ngữ gốc trong ngoặc đơn">🎓 Học thuật chuẩn</button>
+              <button type="button" class="btn btn-xs btn-outline prompt-preset-btn" data-preset="clear" title="Xóa nội dung ô chỉ thị">Xóa</button>
+            </div>
+          </div>
+          <textarea id="customPromptInput" rows="6" placeholder="Ví dụ: Giữ nguyên thuật ngữ viết tắt trong ngoặc đơn, giải thích ngắn gọn các khái niệm khó cho người mới bắt đầu nghiên cứu..."></textarea>
+          <small class="help-text">Đã thiết lập sẵn chế độ <strong>Người mới bắt đầu nghiên cứu (100% Newbie)</strong>: giữ thuật ngữ gốc trong ngoặc đơn và giải thích dễ hiểu các khái niệm chuyên ngành.</small>
         </div>
       </div>
 

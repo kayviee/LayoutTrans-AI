@@ -28,6 +28,15 @@ const VALID_GEMINI_MODELS = new Set([
   'gemini-pro-latest'
 ]);
 
+const PROMPT_PRESETS = Object.freeze({
+  newbie: `Đối tượng đọc là NGƯỜI MỚI BẮT ĐẦU TẬP ĐỌC NGHIÊN CỨU (100% Newbie, chưa có nền tảng chuyên môn trước đó). Hãy tuân thủ nghiêm ngặt các nguyên tắc sau:
+1. DIỄN ĐẠT DỄ HIỂU, TỰ NHIÊN: Dịch đầy đủ 100% câu chữ của bài báo nhưng diễn đạt bằng tiếng Việt mạch lạc, thoát ý, rõ ràng, tránh dịch ghép từ cứng nhắc gây tối nghĩa. Xưng hô nhóm tác giả là "chúng tôi".
+2. GIỮ THUẬT NGỮ GỐC TRONG NGOẶC ĐƠN: Mọi thuật ngữ chuyên ngành, khái niệm khoa học, tên phương pháp, kiến trúc mô hình hoặc từ viết tắt đều phải dịch sang tiếng Việt kèm thuật ngữ tiếng Anh gốc trong ngoặc đơn theo mẫu: Tiếng Việt (English Term - Viết tắt nếu có). Ví dụ: học tăng cường (Reinforcement Learning - RL), mô hình ngôn ngữ lớn (Large Language Model - LLM), đối chuẩn cơ sở (baseline), siêu tham số (hyperparameter).
+3. GIẢI THÍCH NGẮN GỌN CHO NGƯỜI MỚI: Khi gặp các thuật ngữ học thuật trừu tượng, phép thử nghiệm hoặc chỉ số đo lường mà người mới thường không biết (ví dụ: ablation study, zero-shot, few-shot, inductive bias, overfitting, p-value, perplexity, heuristic, scaling law, bottleneck, v.v.), hãy chèn thêm chú thích cực ngắn trong ngoặc vuông ngay sau thuật ngữ: [hiểu đơn giản: ...] bằng ngôn ngữ đời thường dễ hình dung nhất.
+4. TRONG BẢNG DỊCH HÌNH & BIỂU ĐỒ: Ở cột giải nghĩa tiếng Việt, ngoài việc dịch nhãn tiếng Anh, hãy giải thích ngắn gọn thành phần/trục đó thể hiện điều gì để người mới nhìn vào hiểu ngay thông điệp của biểu đồ.`,
+  academic: `Dịch theo văn phong khoa học - học thuật chuẩn mực, mạch lạc, chính xác. Mọi thuật ngữ chuyên ngành, tên mô hình, phương pháp và từ viết tắt giữ nguyên tiếng Anh gốc trong ngoặc đơn ngay sau cụm từ tiếng Việt: Tiếng Việt (English Term). Xưng hô nhóm tác giả là "chúng tôi".`
+});
+
 class LayoutTransApp {
   constructor() {
     this.apiKey = localStorage.getItem('layouttrans_gemini_key') || '';
@@ -45,7 +54,16 @@ class LayoutTransApp {
       : 2;
     localStorage.setItem('layouttrans_chunk_size', String(this.chunkSize));
     localStorage.setItem('layouttrans_batch_settings_version', '3');
-    this.customPrompt = localStorage.getItem('layouttrans_custom_prompt') || '';
+
+    const existingPrompt = localStorage.getItem('layouttrans_custom_prompt');
+    const newbiePromptInitialized = localStorage.getItem('layouttrans_newbie_prompt_v1');
+    if (!existingPrompt && !newbiePromptInitialized) {
+      this.customPrompt = PROMPT_PRESETS.newbie;
+      localStorage.setItem('layouttrans_custom_prompt', this.customPrompt);
+      localStorage.setItem('layouttrans_newbie_prompt_v1', '1');
+    } else {
+      this.customPrompt = existingPrompt || '';
+    }
     this.fontPreference = localStorage.getItem('layouttrans_font_preference') || 'auto';
     if (this.fontPreference !== 'auto' && this.fontPreference !== 'custom' && !TRANSLATION_FONT_PRESETS[this.fontPreference]) {
       this.fontPreference = 'auto';
@@ -274,6 +292,34 @@ class LayoutTransApp {
         localStorage.setItem('layouttrans_custom_font_family', customVal);
       }
       this.applyTranslationTypography(this.pendingFontPreference);
+    });
+
+    // Custom Prompt live auto-save & preset buttons
+    if (this.customPromptInput) {
+      this.customPromptInput.value = this.customPrompt;
+      this.customPromptInput.addEventListener('input', () => {
+        this.customPrompt = this.customPromptInput.value.trim();
+        localStorage.setItem('layouttrans_custom_prompt', this.customPrompt);
+      });
+    }
+    document.querySelectorAll('.prompt-preset-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const presetKey = btn.dataset.preset;
+        if (presetKey === 'clear') {
+          this.customPrompt = '';
+        } else if (PROMPT_PRESETS[presetKey]) {
+          this.customPrompt = PROMPT_PRESETS[presetKey];
+        }
+        if (this.customPromptInput) {
+          this.customPromptInput.value = this.customPrompt;
+        }
+        localStorage.setItem('layouttrans_custom_prompt', this.customPrompt);
+        localStorage.setItem('layouttrans_newbie_prompt_v1', '1');
+        const label = presetKey === 'newbie'
+          ? '🌱 Chế độ Người mới tập đọc nghiên cứu'
+          : (presetKey === 'academic' ? '🎓 Chế độ Học thuật chuẩn' : 'Đã xóa trống chỉ thị bổ sung');
+        this.showToast(`Đã áp dụng & tự động lưu: ${label}`, 'success');
+      });
     });
 
     // Quick Font Selector on Right Pane Header
