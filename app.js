@@ -21,11 +21,12 @@ const TRANSLATION_FONT_PRESETS = Object.freeze({
 });
 
 const VALID_GEMINI_MODELS = new Set([
-  'gemini-2.5-flash',
-  'gemini-2.5-pro',
-  'gemini-2.5-flash-lite',
   'gemini-flash-latest',
-  'gemini-pro-latest'
+  'gemini-3.8-flash',
+  'gemini-pro-latest',
+  'gemini-3.1-flash-lite',
+  'gemini-2.5-flash',
+  'gemini-2.5-pro'
 ]);
 
 const PROMPT_PRESETS = Object.freeze({
@@ -40,11 +41,13 @@ const PROMPT_PRESETS = Object.freeze({
 class LayoutTransApp {
   constructor() {
     this.apiKey = localStorage.getItem('layouttrans_gemini_key') || '';
-    this.selectedModel = localStorage.getItem('layouttrans_model') || 'gemini-2.5-flash';
-    // Migration: fix invalid/non-existent model names if stored previously
-    if (!VALID_GEMINI_MODELS.has(this.selectedModel)) {
-      this.selectedModel = 'gemini-2.5-flash';
+    this.selectedModel = localStorage.getItem('layouttrans_model') || 'gemini-flash-latest';
+    const modelMigratedV2 = localStorage.getItem('layouttrans_model_migrated_v2');
+    // Migrate retired/legacy 2.5 models to gemini-flash-latest so new API keys never hit HTTP 404
+    if (!modelMigratedV2 || !VALID_GEMINI_MODELS.has(this.selectedModel) || this.selectedModel.startsWith('gemini-2.5-') || this.selectedModel.startsWith('gemini-1.5-') || this.selectedModel.startsWith('gemini-2.0-')) {
+      this.selectedModel = 'gemini-flash-latest';
       localStorage.setItem('layouttrans_model', this.selectedModel);
+      localStorage.setItem('layouttrans_model_migrated_v2', '1');
     }
 
     const savedChunkSize = parseInt(localStorage.getItem('layouttrans_chunk_size') || '2', 10);
@@ -87,9 +90,10 @@ class LayoutTransApp {
     this.requestTimeoutMs = 300000;
     this.maxAutomaticAttempts = 5;
     this.highDemandFallbackModels = [
-      'gemini-2.5-flash',
-      'gemini-2.5-flash-lite',
-      'gemini-flash-latest'
+      'gemini-flash-latest',
+      'gemini-3.8-flash',
+      'gemini-3.1-flash-lite',
+      'gemini-pro-latest'
     ];
     this.availableModelNames = null;
     this.translationRunId = 0;
@@ -1179,6 +1183,20 @@ class LayoutTransApp {
         }
         if (error.name === 'AbortError') throw error;
 
+        // Automatic recovery when a model is deprecated/unavailable (HTTP 404 or "no longer available to new users")
+        if (this.isModelNotFoundError(error)) {
+          const replacementModel = await this.resolveReplacementModelForNotFound(error, requestModel, attemptedModels);
+          if (replacementModel && replacementModel !== requestModel) {
+            const oldLabel = this.getModelDisplayName(requestModel);
+            const newLabel = this.getModelDisplayName(replacementModel);
+            this.applyActiveModelSelection(replacementModel);
+            requestModel = replacementModel;
+            this.showToast(`Model ${oldLabel} đã ngừng hỗ trợ cho Key này — Đã tự động chuyển sang ${newLabel} và tiếp tục dịch!`, 'info');
+            attempt = Math.max(0, attempt - 1);
+            continue;
+          }
+        }
+
         const canRetry = attempt < this.maxAutomaticAttempts
           && !this.isHardQuotaError(error)
           && this.isTransientApiError(error);
@@ -1195,6 +1213,81 @@ class LayoutTransApp {
     }
 
     throw lastError || new Error('Không thể hoàn tất batch sau các lần tự thử.');
+  }
+
+  isModelNotFoundError(error) {
+    if (error?.httpStatus === 404) return true;
+    return /no longer available|model .*not found|not supported for generatecontent|update your code to use models\//i.test(
+      `${error?.code || ''} ${error?.message || ''}`
+    );
+  }
+
+  applyActiveModelSelection(modelName) {
+    if (!modelName) return;
+    this.selectedModel = modelName;
+    localStorage.setItem('layouttrans_model', modelName);
+    localStorage.setItem('layouttrans_selected_model', modelName);
+    if (this.modelSelector) {
+      const exists = Array.from(this.modelSelector.options).some(opt => opt.value === modelName);
+      if (!exists) {
+        const opt = document.createElement('option');
+        opt.value = modelName;
+        opt.textContent = `🚀 ${this.getModelDisplayName(modelName)}`;
+        this.modelSelector.prepend(opt);
+      }
+      this.modelSelector.value = modelName;
+    }
+  }
+
+  async resolveReplacementModelForNotFound(error, currentModel, attemptedModels = new Set()) {
+    const msg = String(error?.message || '');
+    // 1. Check if Google API error explicitly tells us which model to use (e.g. "Please update your code to use models/gemini-3.8-flash")
+    const suggestedMatch = msg.match(/models\/([a-zA-Z0-9._-]+)/);
+    if (suggestedMatch && suggestedMatch[1]) {
+      const suggested = suggestedMatch[1].trim();
+      if (suggested && suggested !== currentModel && !attemptedModels.has(suggested)) {
+        return suggested;
+      }
+    }
+
+    // 2. Query /v1beta/models to discover exact models supported by this API key
+    if (!this.availableModelNames && this.apiKey) {
+      try {
+        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(this.apiKey)}`);
+        if (res.ok) {
+          const data = await res.json();
+          const supported = (data.models || [])
+            .filter(m => !Array.isArray(m.supportedGenerationMethods) || m.supportedGenerationMethods.includes('generateContent'))
+            .map(m => String(m.name || '').replace(/^models\//, ''))
+            .filter(Boolean);
+          if (supported.length > 0) {
+            this.availableModelNames = new Set(supported);
+          }
+        }
+      } catch (e) {
+        console.warn('Không thể tải danh sách model dự phòng:', e);
+      }
+    }
+
+    const candidateOrder = [
+      'gemini-flash-latest',
+      'gemini-3.8-flash',
+      'gemini-pro-latest',
+      'gemini-3.1-flash-lite',
+      ...(this.availableModelNames ? [...this.availableModelNames].filter(m => /gemini.*flash/i.test(m)) : []),
+      ...(this.availableModelNames ? [...this.availableModelNames].filter(m => /gemini.*pro/i.test(m)) : [])
+    ];
+
+    for (const candidate of candidateOrder) {
+      if (
+        candidate !== currentModel
+        && !attemptedModels.has(candidate)
+        && (!this.availableModelNames || this.availableModelNames.has(candidate))
+      ) {
+        return candidate;
+      }
+    }
+    return null;
   }
 
   isQuotaError(error) {
@@ -1229,11 +1322,13 @@ class LayoutTransApp {
 
   getModelDisplayName(model) {
     const names = {
+      'gemini-flash-latest': 'Gemini Flash Latest',
+      'gemini-3.8-flash': 'Gemini 3.8 Flash',
+      'gemini-pro-latest': 'Gemini Pro Latest',
+      'gemini-3.1-flash-lite': 'Gemini 3.1 Flash-Lite',
       'gemini-2.5-flash': 'Gemini 2.5 Flash',
       'gemini-2.5-pro': 'Gemini 2.5 Pro',
-      'gemini-2.5-flash-lite': 'Gemini 2.5 Flash-Lite',
-      'gemini-flash-latest': 'Gemini Flash Latest',
-      'gemini-pro-latest': 'Gemini Pro Latest'
+      'gemini-2.5-flash-lite': 'Gemini 2.5 Flash-Lite'
     };
     return names[model] || model;
   }
