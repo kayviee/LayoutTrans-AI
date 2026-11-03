@@ -27,7 +27,7 @@
   <!-- Docx.js for exporting to Word -->
   <script src="https://cdn.jsdelivr.net/npm/docx@8.5.0/build/index.umd.js"></script>
 
-  <link rel="stylesheet" href="style.css?v=1.7.1">
+  <link rel="stylesheet" href="style.css?v=1.7.2">
 </head>
 <body>
   <!-- Header / Navigation Bar -->
@@ -401,7 +401,11 @@
         <div class="modal-title-wrap">
           <strong id="figureLightboxTitle">🔍 Chi tiết Hình minh họa & Bảng dịch thành phần</strong>
         </div>
-        <button class="modal-close" id="closeFigureLightboxBtn" title="Đóng (Esc)">&times;</button>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <button type="button" class="btn btn-xs btn-outline" id="lightboxRotateLeftBtn" title="Xoay hình ngược chiều kim đồng hồ 90°">↺ Xoay trái 90°</button>
+          <button type="button" class="btn btn-xs btn-outline" id="lightboxRotateRightBtn" title="Xoay hình thuận chiều kim đồng hồ 90°">↻ Xoay phải 90°</button>
+          <button class="modal-close" id="closeFigureLightboxBtn" title="Đóng (Esc)">&times;</button>
+        </div>
       </div>
       <div class="figure-lightbox-body">
         <div class="figure-lightbox-image-pane">
@@ -416,6 +420,6 @@
   <div class="toast-container" id="toastContainer"></div>
 
   <!-- Application Logic -->
-  <script src="app.js?v=1.7.1"></script>
+  <script src="app.js?v=1.7.2"></script>
 </body>
 </html>

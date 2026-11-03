@@ -1335,13 +1335,26 @@ body {
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 8px;
   width: 100%;
   margin-top: 0.5rem;
 }
 
+.figure-auto-rotated-badge {
+  margin-right: auto;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #10b981;
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.28);
+  border-radius: 999px;
+  padding: 3px 9px;
+}
+
 .figure-zoom-btn,
-.figure-lightbox-btn {
+.figure-lightbox-btn,
+.figure-rotate-btn {
   position: static;
   background: rgba(15, 23, 42, 0.85);
   color: #ffffff;
@@ -1365,7 +1378,8 @@ body {
 }
 
 .figure-zoom-btn:hover,
-.figure-lightbox-btn:hover {
+.figure-lightbox-btn:hover,
+.figure-rotate-btn:hover {
   background: var(--accent-hover);
   border-color: var(--accent-hover);
   transform: translateY(-1px);

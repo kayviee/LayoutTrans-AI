@@ -205,9 +205,13 @@ class LayoutTransApp {
     // Figure Lightbox Modal
     this.figureLightboxModal = document.getElementById('figureLightboxModal');
     this.closeFigureLightboxBtn = document.getElementById('closeFigureLightboxBtn');
+    this.lightboxRotateLeftBtn = document.getElementById('lightboxRotateLeftBtn');
+    this.lightboxRotateRightBtn = document.getElementById('lightboxRotateRightBtn');
     this.figureLightboxTitle = document.getElementById('figureLightboxTitle');
     this.figureLightboxImg = document.getElementById('figureLightboxImg');
     this.figureLightboxDetails = document.getElementById('figureLightboxDetails');
+    this.activeLightboxFigure = null;
+    this.activeLightboxPageNum = null;
 
     // Toast
     this.toastContainer = document.getElementById('toastContainer');
@@ -447,6 +451,20 @@ class LayoutTransApp {
     // Figure Lightbox Modal Events
     if (this.closeFigureLightboxBtn) {
       this.closeFigureLightboxBtn.addEventListener('click', () => this.closeFigureLightbox());
+    }
+    if (this.lightboxRotateLeftBtn) {
+      this.lightboxRotateLeftBtn.addEventListener('click', () => {
+        if (this.activeLightboxFigure) {
+          this.rotateFigureBy(this.activeLightboxFigure, this.activeLightboxPageNum, -90);
+        }
+      });
+    }
+    if (this.lightboxRotateRightBtn) {
+      this.lightboxRotateRightBtn.addEventListener('click', () => {
+        if (this.activeLightboxFigure) {
+          this.rotateFigureBy(this.activeLightboxFigure, this.activeLightboxPageNum, 90);
+        }
+      });
     }
     if (this.figureLightboxModal) {
       this.figureLightboxModal.addEventListener('click', (e) => {
@@ -880,19 +898,164 @@ class LayoutTransApp {
       .map(item => {
         const text = String(item.str || '').replace(/\s+/g, ' ').trim();
         const transform = item.transform || [];
+        const a = Number(transform[0]) || 0;
+        const b = Number(transform[1]) || 0;
         const x = Number(transform[4]);
         const baselineY = Number(transform[5]);
         const width = Number(item.width);
         const height = Number(item.height) || Math.hypot(Number(transform[2]) || 0, Number(transform[3]) || 0);
         if (!text || !Number.isFinite(x) || !Number.isFinite(baselineY) || !Number.isFinite(width) || width <= 0) return null;
         const safeHeight = Number.isFinite(height) && height > 0 ? height : 8;
-        const ymin = Math.max(0, Math.min(1000, ((pageHeight - baselineY - safeHeight) / pageHeight) * 1000));
-        const xmin = Math.max(0, Math.min(1000, (x / pageWidth) * 1000));
-        const ymax = Math.max(0, Math.min(1000, ((pageHeight - baselineY) / pageHeight) * 1000));
-        const xmax = Math.max(0, Math.min(1000, ((x + width) / pageWidth) * 1000));
-        return { text, bbox: [ymin, xmin, ymax, xmax], hasEOL: Boolean(item.hasEOL) };
+
+        // Detect vertical / sideways text in PDF (e.g. rotated 90° CCW or 90° CW tables/figures)
+        const isVertical = Math.abs(b) > Math.abs(a) * 1.35;
+        let ymin;
+        let xmin;
+        let ymax;
+        let xmax;
+        let rotation = 0;
+
+        if (isVertical && b > 0) {
+          // Rotated 90° CCW on page (reads bottom-to-top) -> needs +90° CW rotation to be upright
+          rotation = 90;
+          ymin = Math.max(0, Math.min(1000, ((pageHeight - (baselineY + width)) / pageHeight) * 1000));
+          ymax = Math.max(0, Math.min(1000, ((pageHeight - baselineY) / pageHeight) * 1000));
+          xmin = Math.max(0, Math.min(1000, ((x - safeHeight) / pageWidth) * 1000));
+          xmax = Math.max(0, Math.min(1000, ((x + safeHeight * 0.4) / pageWidth) * 1000));
+        } else if (isVertical && b < 0) {
+          // Rotated 90° CW on page (reads top-to-bottom) -> needs 270° CW (-90°) rotation to be upright
+          rotation = 270;
+          ymin = Math.max(0, Math.min(1000, ((pageHeight - baselineY) / pageHeight) * 1000));
+          ymax = Math.max(0, Math.min(1000, ((pageHeight - (baselineY - width)) / pageHeight) * 1000));
+          xmin = Math.max(0, Math.min(1000, ((x - safeHeight * 0.4) / pageWidth) * 1000));
+          xmax = Math.max(0, Math.min(1000, ((x + safeHeight) / pageWidth) * 1000));
+        } else {
+          ymin = Math.max(0, Math.min(1000, ((pageHeight - baselineY - safeHeight) / pageHeight) * 1000));
+          xmin = Math.max(0, Math.min(1000, (x / pageWidth) * 1000));
+          ymax = Math.max(0, Math.min(1000, ((pageHeight - baselineY) / pageHeight) * 1000));
+          xmax = Math.max(0, Math.min(1000, ((x + width) / pageWidth) * 1000));
+        }
+
+        return {
+          text,
+          bbox: [Math.min(ymin, ymax), Math.min(xmin, xmax), Math.max(ymin, ymax), Math.max(xmin, xmax)],
+          rotation,
+          hasEOL: Boolean(item.hasEOL)
+        };
       })
       .filter(Boolean);
+  }
+
+  resolveFigureCropAndRotation(pageNum, rawBbox, explicitRotate = 0) {
+    if (!Array.isArray(rawBbox) || rawBbox.length !== 4) {
+      return { bbox: rawBbox, rotation: explicitRotate || 0, autoRotated: false };
+    }
+    const profile = this.getSourcePageProfile(pageNum);
+    const items = Array.isArray(profile?.textItems) ? profile.textItems : [];
+    if (items.length === 0) {
+      return { bbox: rawBbox, rotation: explicitRotate || 0, autoRotated: false };
+    }
+
+    const [rawYMin, rawXMin, rawYMax, rawXMax] = rawBbox;
+    const overlapsBbox = item => {
+      const [iy0, ix0, iy1, ix1] = item.bbox;
+      const cy = (iy0 + iy1) / 2;
+      const cx = (ix0 + ix1) / 2;
+      return cy >= rawYMin - 35 && cy <= rawYMax + 35 && cx >= rawXMin - 35 && cx <= rawXMax + 35;
+    };
+
+    const inBoxItems = items.filter(overlapsBbox);
+    let rotatedCluster = inBoxItems.filter(item => item.rotation === 90 || item.rotation === 270);
+    let rotatedChars = rotatedCluster.reduce((sum, item) => sum + item.text.length, 0);
+
+    // If rawBbox partially missed the rotated region on a page that clearly has a sideways table/figure, include nearby rotated items
+    if (rotatedChars < 30) {
+      const allPageRotated = items.filter(item => item.rotation === 90 || item.rotation === 270);
+      const allPageRotatedChars = allPageRotated.reduce((sum, item) => sum + item.text.length, 0);
+      if (allPageRotatedChars >= 60 && rotatedChars >= 10) {
+        rotatedCluster = allPageRotated;
+        rotatedChars = allPageRotatedChars;
+      }
+    }
+
+    if (rotatedCluster.length >= 3 && rotatedChars >= 25) {
+      const rotYMin = Math.min(...rotatedCluster.map(i => i.bbox[0]));
+      const rotXMin = Math.min(...rotatedCluster.map(i => i.bbox[1]));
+      const rotYMax = Math.max(...rotatedCluster.map(i => i.bbox[2]));
+      const rotXMax = Math.max(...rotatedCluster.map(i => i.bbox[3]));
+
+      // Exclude normal horizontal body-text columns to the left or right of the sideways figure/table
+      const horizontalProse = items.filter(i => i.rotation === 0 && i.text.length >= 16);
+      const rightColumnProse = horizontalProse.filter(i => (
+        i.bbox[1] >= rotXMax - 6
+        && i.bbox[2] >= rotYMin - 20
+        && i.bbox[0] <= rotYMax + 20
+      ));
+      const leftColumnProse = horizontalProse.filter(i => (
+        i.bbox[3] <= rotXMin + 6
+        && i.bbox[2] >= rotYMin - 20
+        && i.bbox[0] <= rotYMax + 20
+      ));
+      const topProse = horizontalProse.filter(i => (
+        i.bbox[2] <= rotYMin + 4
+        && i.bbox[3] >= rotXMin
+        && i.bbox[1] <= rotXMax
+        && !/^(table|figure|bảng|hình)\b/i.test(i.text)
+      ));
+      const bottomProse = horizontalProse.filter(i => (
+        i.bbox[0] >= rotYMax - 4
+        && i.bbox[3] >= rotXMin
+        && i.bbox[1] <= rotXMax
+        && !/^(table|figure|bảng|hình|note|this table)\b/i.test(i.text)
+      ));
+
+      let refinedXMin = Math.max(0, rotXMin - 24);
+      let refinedXMax = Math.min(1000, rotXMax + 24);
+      let refinedYMin = Math.max(0, Math.min(rawYMin, rotYMin) - 16);
+      let refinedYMax = Math.min(1000, Math.max(rawYMax, rotYMax) + 16);
+
+      if (rightColumnProse.length > 0) {
+        const minRightX = Math.min(...rightColumnProse.map(i => i.bbox[1]));
+        refinedXMax = Math.min(refinedXMax, Math.max(rotXMax + 8, minRightX - 10));
+      }
+      if (leftColumnProse.length > 0) {
+        const maxLeftX = Math.max(...leftColumnProse.map(i => i.bbox[3]));
+        refinedXMin = Math.max(refinedXMin, Math.min(rotXMin - 8, maxLeftX + 10));
+      }
+      if (topProse.length > 0) {
+        const maxTopY = Math.max(...topProse.map(i => i.bbox[2]));
+        refinedYMin = Math.max(refinedYMin, Math.min(rotYMin - 6, maxTopY + 8));
+      } else {
+        refinedYMin = Math.max(0, rotYMin - 22);
+      }
+      if (bottomProse.length > 0) {
+        const minBottomY = Math.min(...bottomProse.map(i => i.bbox[0]));
+        refinedYMax = Math.min(refinedYMax, Math.max(rotYMax + 6, minBottomY - 8));
+      } else {
+        refinedYMax = Math.min(1000, rotYMax + 22);
+      }
+
+      const chars90 = rotatedCluster
+        .filter(i => i.rotation === 90)
+        .reduce((sum, i) => sum + i.text.length, 0);
+      const chars270 = rotatedCluster
+        .filter(i => i.rotation === 270)
+        .reduce((sum, i) => sum + i.text.length, 0);
+      const autoRotation = chars90 >= chars270 ? 90 : 270;
+
+      return {
+        bbox: [
+          Math.round(refinedYMin),
+          Math.round(refinedXMin),
+          Math.round(refinedYMax),
+          Math.round(refinedXMax)
+        ],
+        rotation: explicitRotate || autoRotation,
+        autoRotated: true
+      };
+    }
+
+    return { bbox: rawBbox, rotation: explicitRotate || 0, autoRotated: false };
   }
 
   applySourceDocumentProfile() {
@@ -1981,7 +2144,7 @@ ${layoutGuide}
 QUY TẮC SỐ 3 — HÌNH MINH HỌA, BIỂU ĐỒ (CHARTS) VÀ SƠ ĐỒ (FIGURES):
 - KHÔNG chèn chữ đè lên ảnh để tránh làm mờ/sạn hình và chữ chồng chéo chi chít.
 - Với MỌI Hình minh họa, Biểu đồ (Chart/Plot/Graph) hoặc Sơ đồ (Diagram/Flowchart) ở trang N:
-  1. Tạo thẻ <figure class="paper-figure" data-page="N" data-bbox="[ymin,xmin,ymax,xmax]"> trong đó data-bbox là tọa độ [ymin,xmin,ymax,xmax] theo thang 0–1000 ôm sát vùng hình/biểu đồ gốc (tuyệt đối không lấy toàn trang).
+  1. Tạo thẻ <figure class="paper-figure" data-page="N" data-bbox="[ymin,xmin,ymax,xmax]"> trong đó data-bbox là tọa độ [ymin,xmin,ymax,xmax] theo thang 0–1000 ôm sát ĐÚNG vùng hình/biểu đồ gốc (tuyệt đối không lấy toàn trang, và nếu hình chỉ nằm ở 1 cột thì tuyệt đối không kéo tràn sang cột văn bản bên cạnh). Nếu hình hoặc bảng gốc trong PDF bị in xoay dọc 90° (sideways/landscape), hãy thêm thuộc tính data-rotate="90" (nếu chữ đọc từ dưới lên trên) hoặc data-rotate="270" (nếu chữ đọc từ trên xuống dưới).
   2. Bên trong <figure>, đặt <div class="figure-image-slot"></div> ở đầu tiên (ứng dụng sẽ tự cắt hình gốc độ phân giải cao 3x cực nét gắn vào đây).
   3. NGAY PHÍA DƯỚI <div class="figure-image-slot"></div>, BẮT BUỘC tạo một bảng dịch chi tiết toàn bộ các thành phần chữ có trong hình/biểu đồ/sơ đồ đó theo đúng cấu trúc sau:
      <div class="figure-translation-box">
@@ -2227,7 +2390,7 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
       'THEAD', 'TBODY', 'TR', 'TH', 'TD', 'DIV', 'SPAN', 'FIGURE',
       'FIGCAPTION', 'SUP', 'SUB', 'BLOCKQUOTE', 'BR', 'A'
     ]);
-    const allowedAttributes = new Set(['class', 'data-page', 'data-source-page', 'data-bbox', 'data-fignum', 'data-source-label', 'colspan', 'rowspan', 'href', 'start', 'value']);
+    const allowedAttributes = new Set(['class', 'data-page', 'data-source-page', 'data-bbox', 'data-rotate', 'data-fignum', 'data-source-label', 'colspan', 'rowspan', 'href', 'start', 'value']);
     const allowedClasses = new Set([
       'source-page', 'layout-2col', 'book-columns-2', 'authors-block', 'author-row', 'author-name',
       'author-affil', 'abstract-box', 'abstract-title', 'callout', 'callout-note', 'callout-tip', 'callout-warning', 'callout-definition',
@@ -2293,17 +2456,26 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
         const bbox = element.getAttribute('data-bbox');
         if (bbox) {
           try {
-            const parsed = JSON.parse(bbox);
+            let parsed = JSON.parse(bbox);
+            const explicitRotate = parseInt(element.getAttribute('data-rotate') || '0', 10) || 0;
+            if (Array.isArray(parsed) && parsed.length === 4) {
+              const refined = this.resolveFigureCropAndRotation(resolvedPage, parsed, explicitRotate);
+              parsed = refined.bbox;
+              element.setAttribute('data-bbox', JSON.stringify(parsed));
+              if (refined.rotation) {
+                element.setAttribute('data-rotate', String(refined.rotation));
+              }
+            }
             const cropWidth = Array.isArray(parsed) ? parsed[3] - parsed[1] : 0;
             const cropHeight = Array.isArray(parsed) ? parsed[2] - parsed[0] : 0;
             const coversNearlyWholePage = Array.isArray(parsed)
-              && parsed[0] < 30 && parsed[1] < 30 && parsed[2] > 970 && parsed[3] > 970;
+              && parsed[0] < 20 && parsed[1] < 20 && parsed[2] > 980 && parsed[3] > 980;
             const valid = Array.isArray(parsed)
               && parsed.length === 4
               && parsed.every(value => Number.isFinite(value) && value >= 0 && value <= 1000)
-              && parsed[2] > parsed[0] + 30
-              && parsed[3] > parsed[1] + 30
-              && cropWidth * cropHeight <= 680000
+              && parsed[2] > parsed[0] + 25
+              && parsed[3] > parsed[1] + 25
+              && cropWidth * cropHeight <= 880000
               && !coversNearlyWholePage;
             if (!valid) element.removeAttribute('data-bbox');
           } catch (error) {
@@ -2802,7 +2974,7 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
     }
   }
 
-  cropBboxFromCanvas(sourceCanvas, bbox) {
+  cropBboxFromCanvas(sourceCanvas, bbox, rotationDeg = 0) {
     const [ymin, xmin, ymax, xmax] = bbox;
     const pad = 4; // subtle breathing room around cropped figure
     const safeXMin = Math.max(0, xmin - pad);
@@ -2824,7 +2996,130 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, cropW, cropH);
     ctx.drawImage(sourceCanvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
-    return cropCanvas.toDataURL('image/png');
+
+    // Auto-trim excess blank white margins around the figure while keeping a clean 12px border
+    const trimmedCanvas = this.trimCanvasWhitespace(cropCanvas, 12);
+
+    const normalizedRotation = ((Math.round(Number(rotationDeg) / 90) * 90) % 360 + 360) % 360;
+    if (normalizedRotation === 0) {
+      return trimmedCanvas.toDataURL('image/png');
+    }
+
+    const rotatedCanvas = document.createElement('canvas');
+    const swapDims = normalizedRotation === 90 || normalizedRotation === 270;
+    rotatedCanvas.width = swapDims ? trimmedCanvas.height : trimmedCanvas.width;
+    rotatedCanvas.height = swapDims ? trimmedCanvas.width : trimmedCanvas.height;
+    const rCtx = rotatedCanvas.getContext('2d');
+    rCtx.imageSmoothingEnabled = true;
+    rCtx.imageSmoothingQuality = 'high';
+    rCtx.fillStyle = '#ffffff';
+    rCtx.fillRect(0, 0, rotatedCanvas.width, rotatedCanvas.height);
+
+    rCtx.save();
+    if (normalizedRotation === 90) {
+      rCtx.translate(rotatedCanvas.width, 0);
+      rCtx.rotate(Math.PI / 2);
+    } else if (normalizedRotation === 180) {
+      rCtx.translate(rotatedCanvas.width, rotatedCanvas.height);
+      rCtx.rotate(Math.PI);
+    } else if (normalizedRotation === 270) {
+      rCtx.translate(0, rotatedCanvas.height);
+      rCtx.rotate(-Math.PI / 2);
+    }
+    rCtx.drawImage(trimmedCanvas, 0, 0);
+    rCtx.restore();
+
+    return rotatedCanvas.toDataURL('image/png');
+  }
+
+  trimCanvasWhitespace(canvas, marginPx = 12) {
+    try {
+      const w = canvas.width;
+      const h = canvas.height;
+      if (w < 40 || h < 40) return canvas;
+      const ctx = canvas.getContext('2d');
+      const imgData = ctx.getImageData(0, 0, w, h).data;
+      let top = 0;
+      let bottom = h - 1;
+      let left = 0;
+      let right = w - 1;
+
+      const isRowBlank = y => {
+        for (let x = 0; x < w; x += 2) {
+          const idx = (y * w + x) * 4;
+          if (imgData[idx] < 245 || imgData[idx + 1] < 245 || imgData[idx + 2] < 245) return false;
+        }
+        return true;
+      };
+      const isColBlank = x => {
+        for (let y = top; y <= bottom; y += 2) {
+          const idx = (y * w + x) * 4;
+          if (imgData[idx] < 245 || imgData[idx + 1] < 245 || imgData[idx + 2] < 245) return false;
+        }
+        return true;
+      };
+
+      while (top < bottom - 20 && isRowBlank(top)) top++;
+      while (bottom > top + 20 && isRowBlank(bottom)) bottom--;
+      while (left < right - 20 && isColBlank(left)) left++;
+      while (right > left + 20 && isColBlank(right)) right--;
+
+      const padTop = Math.max(0, top - marginPx);
+      const padLeft = Math.max(0, left - marginPx);
+      const padBottom = Math.min(h - 1, bottom + marginPx);
+      const padRight = Math.min(w - 1, right + marginPx);
+      const newW = padRight - padLeft + 1;
+      const newH = padBottom - padTop + 1;
+
+      if (newW >= w - 6 && newH >= h - 6) return canvas;
+
+      const out = document.createElement('canvas');
+      out.width = newW;
+      out.height = newH;
+      const outCtx = out.getContext('2d');
+      outCtx.fillStyle = '#ffffff';
+      outCtx.fillRect(0, 0, newW, newH);
+      outCtx.drawImage(canvas, padLeft, padTop, newW, newH, 0, 0, newW, newH);
+      return out;
+    } catch (e) {
+      return canvas;
+    }
+  }
+
+  rotateFigureBy(fig, pageNum, deltaDeg) {
+    if (!fig) return;
+    let bbox = null;
+    try {
+      const parsed = JSON.parse(fig.dataset.bbox || 'null');
+      if (Array.isArray(parsed) && parsed.length === 4) bbox = parsed;
+    } catch (e) {}
+    if (!bbox) return;
+
+    const currentRot = parseInt(fig.dataset.rotate || '0', 10) || 0;
+    const nextRot = ((currentRot + deltaDeg) % 360 + 360) % 360;
+    fig.dataset.rotate = String(nextRot);
+
+    const imgEl = fig.querySelector('img.original-cropped-figure');
+    const pageWrapper = document.getElementById(`pdf-page-${pageNum}`);
+    const previewCanvas = pageWrapper ? pageWrapper.querySelector('canvas') : null;
+
+    if (previewCanvas && imgEl) {
+      const quickUrl = this.cropBboxFromCanvas(previewCanvas, bbox, nextRot);
+      imgEl.src = quickUrl;
+      if (this.activeLightboxFigure === fig && this.figureLightboxImg) {
+        this.figureLightboxImg.src = quickUrl;
+      }
+    }
+
+    this.getHighResPageCanvas(pageNum, 3.0).then(highResCanvas => {
+      if (highResCanvas && imgEl && imgEl.isConnected) {
+        const hiUrl = this.cropBboxFromCanvas(highResCanvas, bbox, nextRot);
+        imgEl.src = hiUrl;
+        if (this.activeLightboxFigure === fig && this.figureLightboxImg) {
+          this.figureLightboxImg.src = hiUrl;
+        }
+      }
+    });
   }
 
   openFigureLightbox(fig, pageNum) {
@@ -2832,6 +3127,8 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
     const imgEl = fig.querySelector('img.original-cropped-figure');
     if (!imgEl || !imgEl.src) return;
 
+    this.activeLightboxFigure = fig;
+    this.activeLightboxPageNum = pageNum;
     this.figureLightboxImg.src = imgEl.src;
     const captionEl = fig.querySelector('figcaption');
     const translationBoxEl = fig.querySelector('.figure-translation-box');
@@ -2868,6 +3165,8 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
     if (this.figureLightboxModal) {
       this.figureLightboxModal.style.display = 'none';
     }
+    this.activeLightboxFigure = null;
+    this.activeLightboxPageNum = null;
   }
 
   attachOriginalFigures(container) {
@@ -2962,13 +3261,28 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
           return;
         }
 
-        const initialDataUrl = previewCanvas ? this.cropBboxFromCanvas(previewCanvas, bbox) : '';
+        // Automatically refine crop bbox (strip adjacent horizontal text columns) and detect 90°/270° rotated sideways figures/tables
+        const explicitRotate = parseInt(fig.dataset.rotate || '0', 10) || 0;
+        const refined = this.resolveFigureCropAndRotation(pageNum, bbox, explicitRotate);
+        bbox = refined.bbox;
+        const rotationDeg = refined.rotation || 0;
+        fig.dataset.bbox = JSON.stringify(bbox);
+        fig.dataset.rotate = String(rotationDeg);
+
+        const initialDataUrl = previewCanvas ? this.cropBboxFromCanvas(previewCanvas, bbox, rotationDeg) : '';
         slot.innerHTML = `
           <div class="cropped-figure-wrapper">
             <div class="cropped-figure-stage">
               <img src="${initialDataUrl}" class="original-cropped-figure" alt="Hình gốc nét cao từ trang ${pageNum}" title="Bấm vào hình để phóng to độ phân giải cao (3x)" />
             </div>
             <div class="figure-action-bar">
+              ${refined.autoRotated ? '<span class="figure-auto-rotated-badge" title="Đã tự động cắt bỏ cột chữ thừa và xoay ngang hình bị dọc">✨ Đã tự cắt & xoay ngang 90°</span>' : ''}
+              <button class="figure-rotate-btn figure-rotate-left-btn" type="button" title="Xoay hình ngược chiều kim đồng hồ 90°">
+                <span>↺ Xoay trái 90°</span>
+              </button>
+              <button class="figure-rotate-btn figure-rotate-right-btn" type="button" title="Xoay hình thuận chiều kim đồng hồ 90°">
+                <span>↻ Xoay phải 90°</span>
+              </button>
               <button class="figure-lightbox-btn" type="button" title="Phóng to hình nét cao kèm bảng dịch thành phần">
                 <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
                 <span>Phóng to Hình & Bảng dịch</span>
@@ -2985,7 +3299,8 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
         // Upgrade image to ultra-crisp 3.0x High-DPI offscreen render asynchronously so it is never grainy ("không bị sạn")
         this.getHighResPageCanvas(pageNum, 3.0).then(highResCanvas => {
           if (highResCanvas && imgEl && imgEl.isConnected) {
-            imgEl.src = this.cropBboxFromCanvas(highResCanvas, bbox);
+            const currentRot = parseInt(fig.dataset.rotate || String(rotationDeg), 10) || 0;
+            imgEl.src = this.cropBboxFromCanvas(highResCanvas, bbox, currentRot);
           }
         });
 
@@ -2994,6 +3309,24 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
             e.preventDefault();
             e.stopPropagation();
             this.openFigureLightbox(fig, pageNum);
+          });
+        }
+
+        const rotateLeftBtn = slot.querySelector('.figure-rotate-left-btn');
+        if (rotateLeftBtn) {
+          rotateLeftBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            this.rotateFigureBy(fig, pageNum, -90);
+          });
+        }
+
+        const rotateRightBtn = slot.querySelector('.figure-rotate-right-btn');
+        if (rotateRightBtn) {
+          rotateRightBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            this.rotateFigureBy(fig, pageNum, 90);
           });
         }
 
