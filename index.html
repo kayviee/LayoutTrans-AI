@@ -27,12 +27,12 @@
   <!-- Docx.js for exporting to Word -->
   <script src="https://cdn.jsdelivr.net/npm/docx@8.5.0/build/index.umd.js"></script>
 
-  <link rel="stylesheet" href="style.css?v=1.8.1">
+  <link rel="stylesheet" href="style.css?v=1.9.0">
 </head>
 <body>
   <!-- Header / Navigation Bar -->
   <header class="app-header">
-    <div class="header-brand">
+    <div class="header-brand" id="headerBrandHome" style="cursor:pointer;" title="Về Trang chủ & Kệ sách nghiên cứu">
       <div class="brand-icon">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1-2.5-2.5Z"/>
@@ -50,6 +50,10 @@
 
     <!-- Center: View Mode Switcher -->
     <div class="view-mode-group">
+      <button class="view-btn" id="openLibraryBtn" title="Mở Thư viện Kệ sách các tài liệu đã dịch & lưu">
+        <span>📚 Kệ sách</span>
+        <span id="libraryCountBadge" class="library-badge-count" style="display:none;">0</span>
+      </button>
       <button class="view-btn active" id="viewSplitBtn" title="Xem song song đối chiếu">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 3v18"/></svg>
         <span>Song song</span>
@@ -188,39 +192,63 @@
 
   <!-- Main Dual-Pane Workspace -->
   <main class="workspace" id="mainWorkspace">
-    <!-- Initial Empty Dropzone State -->
+    <!-- Initial Home / Library Bookshelf & Dropzone State -->
     <div class="dropzone-container" id="dropzoneContainer">
-      <div class="dropzone-card" id="dropzoneCard">
-        <input type="file" id="pdfFileInput" accept="application/pdf" hidden>
-        <div class="upload-illustration">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-            <polyline points="14 2 14 8 20 8"/>
-            <line x1="12" y1="18" x2="12" y2="12"/>
-            <line x1="9" y1="15" x2="12" y2="12"/>
-            <line x1="15" y1="15" x2="12" y2="12"/>
-          </svg>
+      <div class="home-library-layout">
+        <div class="dropzone-card" id="dropzoneCard">
+          <input type="file" id="pdfFileInput" accept="application/pdf" hidden>
+          <div class="dropzone-main-row">
+            <div class="upload-illustration">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+                <line x1="12" y1="18" x2="12" y2="12"/>
+                <line x1="9" y1="15" x2="12" y2="12"/>
+                <line x1="15" y1="15" x2="12" y2="12"/>
+              </svg>
+            </div>
+            <div>
+              <h2>Kéo thả tài liệu PDF vào đây</h2>
+              <p>Hỗ trợ bài nghiên cứu, sách học thuật, giáo trình hoặc báo cáo (tự động lưu vào Kệ sách để đọc lại bất cứ lúc nào).</p>
+            </div>
+          </div>
+          <button class="btn btn-primary btn-lg" id="selectFileBtn">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            Chọn file PDF mới
+          </button>
+          <div class="dropzone-features">
+            <div class="feature-item">
+              <span class="feature-icon">✨</span>
+              <span>Đối chiếu từng trang, dịch cả nhãn hình và chặn bản dịch thiếu</span>
+            </div>
+            <div class="feature-item">
+              <span class="feature-icon">📚</span>
+              <span>Lưu tự động vào Kệ sách cá nhân — mở đọc song song và đổi font tức thì</span>
+            </div>
+            <div class="feature-item">
+              <span class="feature-icon">🔒</span>
+              <span>Dùng API Key riêng; toàn bộ dữ liệu và bản dịch lưu cục bộ trên máy bạn</span>
+            </div>
+          </div>
         </div>
-        <h2>Kéo thả tài liệu PDF vào đây</h2>
-        <p>Hỗ trợ sách học thuật, giáo trình, báo cáo hoặc bài nghiên cứu (PDF đẹp/gốc).</p>
-        <button class="btn btn-primary btn-lg" id="selectFileBtn">
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-          Chọn file từ máy tính
-        </button>
-        <div class="dropzone-features">
-          <div class="feature-item">
-            <span class="feature-icon">✨</span>
-            <span>Đối chiếu từng trang, dịch cả nhãn hình và chặn bản dịch thiếu</span>
+
+        <!-- Cozy Academic Bookshelf Section -->
+        <section class="bookshelf-section" id="libraryBookshelfSection" style="display: none;">
+          <div class="bookshelf-header">
+            <div class="bookshelf-title-group">
+              <div class="bookshelf-icon">📚</div>
+              <div>
+                <h3>Kệ sách nghiên cứu của bạn</h3>
+                <p>Nhấn vào bất kỳ cuốn nào để mở đọc song song, tùy chỉnh font/cỡ chữ hoặc xuất PDF/Word ngay mà không cần dịch lại.</p>
+              </div>
+            </div>
+            <div class="bookshelf-controls">
+              <input type="search" id="librarySearchInput" class="bookshelf-search-input" placeholder="🔍 Tìm theo tên bài báo, tên file...">
+              <span id="bookshelfTotalBadge" class="bookshelf-count-badge">0 tài liệu</span>
+            </div>
           </div>
-          <div class="feature-item">
-            <span class="feature-icon">⚡</span>
-            <span>Gộp 2–4 trang/request nhưng vẫn kiểm tra riêng từng trang</span>
-          </div>
-          <div class="feature-item">
-            <span class="feature-icon">🔒</span>
-            <span>Dùng API Key riêng; nội dung trang được gửi tới Gemini để dịch</span>
-          </div>
-        </div>
+          <div class="bookshelf-grid" id="libraryBookshelfGrid"></div>
+        </section>
       </div>
     </div>
 
@@ -466,21 +494,21 @@
               <div class="size-control-item">
                 <label for="h1SizeInput">Heading 1 (Tên bài)</label>
                 <div class="size-input-wrap">
-                  <input type="number" id="h1SizeInput" min="18" max="40" value="26" step="1">
+                  <input type="number" id="h1SizeInput" min="18" max="44" value="30" step="1">
                   <span>px</span>
                 </div>
               </div>
               <div class="size-control-item">
                 <label for="h2SizeInput">Heading 2 (Mục lớn)</label>
                 <div class="size-input-wrap">
-                  <input type="number" id="h2SizeInput" min="15" max="32" value="20" step="1">
+                  <input type="number" id="h2SizeInput" min="15" max="36" value="23" step="1">
                   <span>px</span>
                 </div>
               </div>
               <div class="size-control-item">
                 <label for="h3SizeInput">Heading 3 (Mục nhỏ)</label>
                 <div class="size-input-wrap">
-                  <input type="number" id="h3SizeInput" min="13" max="26" value="17" step="1">
+                  <input type="number" id="h3SizeInput" min="13" max="30" value="19" step="1">
                   <span>px</span>
                 </div>
               </div>
@@ -561,6 +589,6 @@
   <div class="toast-container" id="toastContainer"></div>
 
   <!-- Application Logic -->
-  <script src="app.js?v=1.8.1"></script>
+  <script src="app.js?v=1.9.0"></script>
 </body>
 </html>

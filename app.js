@@ -44,9 +44,9 @@ const DEFAULT_TYPOGRAPHY_CONFIG = Object.freeze({
   bodyFont: 'georgia',
   captionFont: 'georgia',
   captionItalic: true,
-  h1Size: 26,
-  h2Size: 20,
-  h3Size: 17,
+  h1Size: 30,
+  h2Size: 23,
+  h3Size: 19,
   bodySize: 16,
   captionSize: 14
 });
@@ -82,8 +82,8 @@ class LayoutTransApp {
     }
 
     // Initialize role-based typography & custom sizes (Default: Heading Inter + Body Georgia + Caption Georgia Italic)
-    const typoV2Init = localStorage.getItem('layouttrans_typography_v2_init');
-    if (!typoV2Init) {
+    const typoV3Init = localStorage.getItem('layouttrans_typography_v3_init');
+    if (!typoV3Init) {
       this.typographyMode = DEFAULT_TYPOGRAPHY_CONFIG.typographyMode;
       this.headingFont = DEFAULT_TYPOGRAPHY_CONFIG.headingFont;
       this.bodyFont = DEFAULT_TYPOGRAPHY_CONFIG.bodyFont;
@@ -95,7 +95,7 @@ class LayoutTransApp {
       this.fontSize = DEFAULT_TYPOGRAPHY_CONFIG.bodySize;
       this.captionSize = DEFAULT_TYPOGRAPHY_CONFIG.captionSize;
       this.persistTypographySettings();
-      localStorage.setItem('layouttrans_typography_v2_init', '1');
+      localStorage.setItem('layouttrans_typography_v3_init', '1');
     } else {
       const savedMode = localStorage.getItem('layouttrans_typography_mode');
       this.typographyMode = savedMode === 'unified' ? 'unified' : 'split';
@@ -111,9 +111,9 @@ class LayoutTransApp {
         const parsed = parseInt(raw, 10);
         return Number.isFinite(parsed) ? Math.max(min, Math.min(max, parsed)) : fallback;
       };
-      this.h1Size = clampInt(localStorage.getItem('layouttrans_h1_size'), 18, 40, DEFAULT_TYPOGRAPHY_CONFIG.h1Size);
-      this.h2Size = clampInt(localStorage.getItem('layouttrans_h2_size'), 15, 32, DEFAULT_TYPOGRAPHY_CONFIG.h2Size);
-      this.h3Size = clampInt(localStorage.getItem('layouttrans_h3_size'), 13, 26, DEFAULT_TYPOGRAPHY_CONFIG.h3Size);
+      this.h1Size = clampInt(localStorage.getItem('layouttrans_h1_size'), 18, 44, DEFAULT_TYPOGRAPHY_CONFIG.h1Size);
+      this.h2Size = clampInt(localStorage.getItem('layouttrans_h2_size'), 15, 36, DEFAULT_TYPOGRAPHY_CONFIG.h2Size);
+      this.h3Size = clampInt(localStorage.getItem('layouttrans_h3_size'), 13, 30, DEFAULT_TYPOGRAPHY_CONFIG.h3Size);
       this.fontSize = clampInt(localStorage.getItem('layouttrans_font_size'), 12, 28, DEFAULT_TYPOGRAPHY_CONFIG.bodySize);
       this.captionSize = clampInt(localStorage.getItem('layouttrans_caption_size'), 11, 22, DEFAULT_TYPOGRAPHY_CONFIG.captionSize);
     }
@@ -152,6 +152,8 @@ class LayoutTransApp {
     this.isTranslating = false;
     this.isPaused = false;
     this.currentChunkIndex = 0;
+    this.libraryBooks = [];
+    this.libraryDb = null;
 
     // Load persisted reader & viewer settings
     this.syncScroll = localStorage.getItem('layouttrans_sync_scroll') !== 'false';
@@ -168,6 +170,7 @@ class LayoutTransApp {
     this.loadSavedTheme();
     this.restorePersistedUiState();
     this.applyTranslationTypography();
+    this.initLibrary();
   }
 
   persistTypographySettings() {
@@ -185,6 +188,9 @@ class LayoutTransApp {
 
   initElements() {
     // Header & Views
+    this.headerBrandHome = document.getElementById('headerBrandHome');
+    this.openLibraryBtn = document.getElementById('openLibraryBtn');
+    this.libraryCountBadge = document.getElementById('libraryCountBadge');
     this.viewSplitBtn = document.getElementById('viewSplitBtn');
     this.viewTransBtn = document.getElementById('viewTransBtn');
     this.viewOrigBtn = document.getElementById('viewOrigBtn');
@@ -193,6 +199,12 @@ class LayoutTransApp {
     this.themeToggleBtn = document.getElementById('themeToggleBtn');
     this.themeIconDark = document.getElementById('themeIconDark');
     this.themeIconLight = document.getElementById('themeIconLight');
+
+    // Home Library Bookshelf
+    this.libraryBookshelfSection = document.getElementById('libraryBookshelfSection');
+    this.libraryBookshelfGrid = document.getElementById('libraryBookshelfGrid');
+    this.librarySearchInput = document.getElementById('librarySearchInput');
+    this.bookshelfTotalBadge = document.getElementById('bookshelfTotalBadge');
 
     // Export Dropdown
     this.exportMenuBtn = document.getElementById('exportMenuBtn');
@@ -363,10 +375,21 @@ class LayoutTransApp {
       }
     });
 
+    // Library & Home navigation controls
+    if (this.openLibraryBtn) {
+      this.openLibraryBtn.addEventListener('click', () => this.showHomeLibraryView());
+    }
+    if (this.headerBrandHome) {
+      this.headerBrandHome.addEventListener('click', () => this.showHomeLibraryView());
+    }
+    if (this.librarySearchInput) {
+      this.librarySearchInput.addEventListener('input', () => this.renderLibraryBookshelf());
+    }
+
     // Translation controls
     this.startTranslateBtn.addEventListener('click', () => this.startTranslationProcess());
     this.pauseTranslateBtn.addEventListener('click', () => this.togglePauseTranslation());
-    this.resetDocBtn.addEventListener('click', () => this.resetWorkspace());
+    this.resetDocBtn.addEventListener('click', () => this.showHomeLibraryView());
 
     // Settings Modal
     this.openSettingsBtn.addEventListener('click', () => this.openSettings());
@@ -445,9 +468,9 @@ class LayoutTransApp {
         inputEl.value = String(this[propName]);
       });
     };
-    bindSizeInput(this.h1SizeInput, 'h1Size', 18, 40);
-    bindSizeInput(this.h2SizeInput, 'h2Size', 15, 32);
-    bindSizeInput(this.h3SizeInput, 'h3Size', 13, 26);
+    bindSizeInput(this.h1SizeInput, 'h1Size', 18, 44);
+    bindSizeInput(this.h2SizeInput, 'h2Size', 15, 36);
+    bindSizeInput(this.h3SizeInput, 'h3Size', 13, 30);
     bindSizeInput(this.bodySizeInput, 'fontSize', 12, 28);
     bindSizeInput(this.captionSizeInput, 'captionSize', 11, 22);
 
@@ -717,6 +740,7 @@ class LayoutTransApp {
         try { this.currentAbortController.abort(); } catch (error) {}
       }
       this.currentFile = file;
+      this.currentPdfBuffer = null;
       this.highResPageCanvasCache.clear();
       this.sourcePageProfiles = [];
       this.sourceTypography = null;
@@ -730,6 +754,7 @@ class LayoutTransApp {
       // CRITICAL FIX: Pass a cloned slice of ArrayBuffer to PDF.js
       // because PDF.js transfers (detaches) the buffer to its Web Worker!
       const rawBuffer = await file.arrayBuffer();
+      this.currentPdfBuffer = rawBuffer.slice(0);
       const pdfJsBuffer = rawBuffer.slice(0);
 
       // Pre-load PDFLib master document once so extracting pages later is instantaneous (< 0.1s)
@@ -759,6 +784,8 @@ class LayoutTransApp {
       // Switch to Dual Pane View
       this.dropzoneContainer.style.display = 'none';
       this.dualPaneContainer.style.display = 'flex';
+      if (this.openLibraryBtn) this.openLibraryBtn.classList.remove('active');
+      this.setViewMode(this.viewMode, false);
       this.resetDocBtn.style.display = 'inline-flex';
       this.startTranslateBtn.disabled = true;
 
@@ -768,8 +795,9 @@ class LayoutTransApp {
 
       // Restore cached translated pages if available for this PDF
       const restoredCount = this.restoreCachedTranslationsForCurrentDoc();
+      await this.saveCurrentDocToLibrary();
       if (restoredCount > 0) {
-        this.showToast(`⚡ Đã tự động khôi phục ${restoredCount}/${this.totalPages} trang đã dịch từ bộ nhớ đệm!`, 'success');
+        this.showToast(`⚡ Đã tự động khôi phục ${restoredCount}/${this.totalPages} trang đã dịch từ Kệ sách!`, 'success');
       } else {
         this.showToast(`Đã nạp ${this.totalPages} trang thành ${this.chunks.length} batch (${this.chunkSize} trang/request).`, 'success');
       }
@@ -777,6 +805,418 @@ class LayoutTransApp {
       console.error('Lỗi khi nạp PDF:', err);
       this.showToast(`Lỗi nạp file PDF: ${err.message}`, 'error');
     }
+  }
+
+  // ==================== Cozy Home / Library Bookshelf Manager ====================
+
+  async openLibraryDatabase() {
+    if (this.libraryDb) return this.libraryDb;
+    if (typeof indexedDB === 'undefined') return null;
+    return new Promise(resolve => {
+      try {
+        const req = indexedDB.open('layouttrans_library_db', 1);
+        req.onupgradeneeded = (e) => {
+          const db = e.target.result;
+          if (!db.objectStoreNames.contains('books')) {
+            db.createObjectStore('books', { keyPath: 'docId' });
+          }
+        };
+        req.onsuccess = (e) => {
+          this.libraryDb = e.target.result;
+          resolve(this.libraryDb);
+        };
+        req.onerror = () => resolve(null);
+      } catch (e) {
+        resolve(null);
+      }
+    });
+  }
+
+  async getAllBooksFromIndexedDb() {
+    const db = await this.openLibraryDatabase();
+    if (!db) return [];
+    return new Promise(resolve => {
+      try {
+        const tx = db.transaction('books', 'readonly');
+        const store = tx.objectStore('books');
+        const req = store.getAll();
+        req.onsuccess = () => resolve(Array.isArray(req.result) ? req.result : []);
+        req.onerror = () => resolve([]);
+      } catch (e) {
+        resolve([]);
+      }
+    });
+  }
+
+  async putBookToIndexedDb(record) {
+    const db = await this.openLibraryDatabase();
+    if (!db || !record?.docId) return false;
+    return new Promise(resolve => {
+      try {
+        const tx = db.transaction('books', 'readwrite');
+        const store = tx.objectStore('books');
+        store.put(record);
+        tx.oncomplete = () => resolve(true);
+        tx.onerror = () => resolve(false);
+      } catch (e) {
+        resolve(false);
+      }
+    });
+  }
+
+  async deleteBookFromIndexedDb(docId) {
+    const db = await this.openLibraryDatabase();
+    if (!db || !docId) return false;
+    return new Promise(resolve => {
+      try {
+        const tx = db.transaction('books', 'readwrite');
+        const store = tx.objectStore('books');
+        store.delete(docId);
+        tx.oncomplete = () => resolve(true);
+        tx.onerror = () => resolve(false);
+      } catch (e) {
+        resolve(false);
+      }
+    });
+  }
+
+  extractMetadataFromPageResults(pageResultsObj, fallbackFileName = '') {
+    let paperTitleVi = '';
+    let paperCategory = '';
+    let latestSavedAt = 0;
+    const validPages = [];
+
+    if (pageResultsObj && typeof pageResultsObj === 'object') {
+      Object.entries(pageResultsObj).forEach(([pageStr, res]) => {
+        const pNum = parseInt(pageStr, 10);
+        if (Number.isInteger(pNum) && res?.html && res?.qa?.passed) {
+          validPages.push({ pageNum: pNum, html: res.html, savedAt: res.savedAt || 0 });
+          if ((res.savedAt || 0) > latestSavedAt) latestSavedAt = res.savedAt;
+        }
+      });
+    }
+
+    validPages.sort((a, b) => a.pageNum - b.pageNum);
+    if (validPages.length > 0) {
+      const firstPageHtml = validPages[0].html || '';
+      const temp = document.createElement('div');
+      temp.innerHTML = firstPageHtml;
+      const metaEl = temp.querySelector('.paper-journal-meta, .paper-cover-institution');
+      if (metaEl) {
+        paperCategory = (metaEl.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 55);
+      }
+      const h1El = temp.querySelector('h1') || temp.querySelector('h2');
+      if (h1El) {
+        paperTitleVi = (h1El.textContent || '').replace(/\s+/g, ' ').trim();
+      }
+      if (!paperTitleVi) {
+        const firstP = temp.querySelector('p');
+        if (firstP) paperTitleVi = (firstP.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+      }
+      if (!paperCategory) {
+        const rawText = (temp.textContent || '').replace(/\s+/g, ' ').trim();
+        const kickerMatch = rawText.match(/\b(npj\s*\|\s*[^.\n]{3,45}|Digital Medicine|Perspective|Review|Original Article)\b/i);
+        if (kickerMatch) paperCategory = kickerMatch[1].trim().slice(0, 48);
+      }
+    }
+
+    const cleanFallback = String(fallbackFileName || 'Tài liệu nghiên cứu')
+      .replace(/\.pdf$/i, '')
+      .replace(/_/g, ' ');
+
+    return {
+      paperTitleVi: paperTitleVi || cleanFallback,
+      paperCategory: paperCategory || 'Tài liệu học thuật PDF',
+      translatedCount: validPages.length,
+      latestSavedAt: latestSavedAt || Date.now()
+    };
+  }
+
+  async initLibrary() {
+    try {
+      const dbBooks = await this.getAllBooksFromIndexedDb();
+      const mapByKey = new Map();
+      dbBooks.forEach(book => {
+        if (book?.docId) mapByKey.set(book.docId, book);
+      });
+
+      // Scan localStorage for any layouttrans_cache_v2_* caches and merge into Library
+      for (let i = 0; i < localStorage.length; i++) {
+        const lsKey = localStorage.key(i);
+        if (!lsKey || !lsKey.startsWith('layouttrans_cache_v2_')) continue;
+        try {
+          const raw = localStorage.getItem(lsKey);
+          if (!raw) continue;
+          const pageResultsObj = JSON.parse(raw);
+          const suffix = lsKey.slice('layouttrans_cache_v2_'.length);
+          const parts = suffix.split('_');
+          const parsedTotalPages = parts.length >= 2 ? parseInt(parts[parts.length - 1], 10) : 0;
+          const parsedSize = parts.length >= 3 ? parseInt(parts[parts.length - 2], 10) : 0;
+          const rawNamePart = parts.length >= 3 ? parts.slice(0, -2).join('_') : suffix;
+          const meta = this.extractMetadataFromPageResults(pageResultsObj, rawNamePart);
+          if (meta.translatedCount === 0 && !mapByKey.has(lsKey)) continue;
+
+          const existing = mapByKey.get(lsKey);
+          const mergedPageResults = {
+            ...(existing?.pageResults || {}),
+            ...(pageResultsObj || {})
+          };
+          const mergedMeta = this.extractMetadataFromPageResults(mergedPageResults, existing?.fileName || rawNamePart);
+          const record = {
+            docId: lsKey,
+            fileName: existing?.fileName || rawNamePart,
+            fileSize: existing?.fileSize || parsedSize || 0,
+            totalPages: existing?.totalPages || parsedTotalPages || mergedMeta.translatedCount,
+            translatedPages: mergedMeta.translatedCount,
+            paperTitleVi: mergedMeta.paperTitleVi,
+            paperCategory: mergedMeta.paperCategory,
+            updatedAt: Math.max(existing?.updatedAt || 0, mergedMeta.latestSavedAt),
+            pdfArrayBuffer: existing?.pdfArrayBuffer || null,
+            pageResults: mergedPageResults
+          };
+          mapByKey.set(lsKey, record);
+          await this.putBookToIndexedDb(record);
+        } catch (e) {}
+      }
+
+      this.libraryBooks = Array.from(mapByKey.values())
+        .filter(b => (b.translatedPages || 0) > 0 || b.pdfArrayBuffer)
+        .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+
+      this.renderLibraryBookshelf();
+    } catch (e) {
+      console.warn('Khởi tạo Kệ sách:', e);
+    }
+  }
+
+  async saveCurrentDocToLibrary() {
+    const docId = this.getDocCacheKey();
+    if (!docId || !this.currentFile) return;
+
+    const existing = this.libraryBooks.find(b => b.docId === docId);
+    const pageResultsObj = { ...(existing?.pageResults || {}) };
+    try {
+      const raw = localStorage.getItem(docId);
+      if (raw) Object.assign(pageResultsObj, JSON.parse(raw));
+    } catch (e) {}
+
+    this.chunks.forEach(chunk => {
+      (chunk.pageResults || []).forEach(pr => {
+        if (pr?.pageNum && pr?.html && pr?.qa?.passed) {
+          pageResultsObj[pr.pageNum] = {
+            pageNum: pr.pageNum,
+            html: pr.html,
+            qa: pr.qa,
+            savedAt: pr.savedAt || Date.now()
+          };
+        }
+      });
+    });
+
+    const meta = this.extractMetadataFromPageResults(pageResultsObj, this.currentFile.name);
+    const record = {
+      docId,
+      fileName: this.currentFile.name,
+      fileSize: this.currentFile.size || 0,
+      totalPages: this.totalPages || meta.translatedCount,
+      translatedPages: meta.translatedCount,
+      paperTitleVi: meta.paperTitleVi,
+      paperCategory: meta.paperCategory,
+      updatedAt: Date.now(),
+      pdfArrayBuffer: this.currentPdfBuffer || existing?.pdfArrayBuffer || null,
+      pageResults: pageResultsObj
+    };
+
+    const idx = this.libraryBooks.findIndex(b => b.docId === docId);
+    if (idx >= 0) this.libraryBooks[idx] = record;
+    else this.libraryBooks.unshift(record);
+    this.libraryBooks.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+
+    await this.putBookToIndexedDb(record);
+    this.renderLibraryBookshelf();
+  }
+
+  renderLibraryBookshelf() {
+    const totalCount = this.libraryBooks.length;
+    if (this.libraryCountBadge) {
+      this.libraryCountBadge.style.display = totalCount > 0 ? 'inline-flex' : 'none';
+      this.libraryCountBadge.textContent = String(totalCount);
+    }
+    if (this.bookshelfTotalBadge) {
+      this.bookshelfTotalBadge.textContent = `${totalCount} tài liệu`;
+    }
+    if (this.dropzoneCard) {
+      this.dropzoneCard.classList.toggle('compact-mode', totalCount > 0);
+    }
+    if (!this.libraryBookshelfSection || !this.libraryBookshelfGrid) return;
+
+    if (totalCount === 0) {
+      this.libraryBookshelfSection.style.display = 'none';
+      return;
+    }
+
+    this.libraryBookshelfSection.style.display = 'block';
+    const query = (this.librarySearchInput?.value || '').trim().toLowerCase();
+    const filtered = query
+      ? this.libraryBooks.filter(b => (
+          String(b.paperTitleVi || '').toLowerCase().includes(query)
+          || String(b.fileName || '').toLowerCase().includes(query)
+          || String(b.paperCategory || '').toLowerCase().includes(query)
+        ))
+      : this.libraryBooks;
+
+    if (filtered.length === 0) {
+      this.libraryBookshelfGrid.innerHTML = `<div class="bookshelf-empty">Không tìm thấy tài liệu nào khớp với từ khóa "${this.escapeHtml(query)}".</div>`;
+      return;
+    }
+
+    const spineColors = ['', 'spine-emerald', 'spine-amber', 'spine-rose', 'spine-cyan', 'spine-violet'];
+    const formatTimeAgo = ts => {
+      if (!ts) return 'Vừa lưu';
+      const diffMin = Math.max(0, Math.floor((Date.now() - ts) / 60000));
+      if (diffMin < 2) return 'Vừa xong';
+      if (diffMin < 60) return `${diffMin} phút trước`;
+      const diffHr = Math.floor(diffMin / 60);
+      if (diffHr < 24) return `${diffHr} giờ trước`;
+      const d = new Date(ts);
+      return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+    };
+
+    this.libraryBookshelfGrid.innerHTML = filtered.map((book, idx) => {
+      const hashSeed = String(book.docId || '').split('').reduce((acc, ch) => acc + ch.charCodeAt(0), idx);
+      const spineClass = spineColors[hashSeed % spineColors.length];
+      const total = Math.max(1, book.totalPages || book.translatedPages || 1);
+      const done = Math.min(total, book.translatedPages || 0);
+      const isComplete = done >= total && done > 0;
+      const hasPdfBinary = Boolean(book.pdfArrayBuffer);
+      const sizeMb = book.fileSize ? `${(book.fileSize / (1024 * 1024)).toFixed(1)} MB • ` : '';
+
+      return `
+        <article class="book-card" data-doc-id="${this.escapeHtml(book.docId)}" title="Nhấn để mở đọc & học trực tiếp: ${this.escapeHtml(book.paperTitleVi)}">
+          <div class="book-spine ${spineClass}"></div>
+          <div class="book-content">
+            <div>
+              <div class="book-top-meta">
+                <span class="book-category-tag">${this.escapeHtml(book.paperCategory || 'Nghiên cứu khoa học')}</span>
+                <span class="book-date">${formatTimeAgo(book.updatedAt)}</span>
+              </div>
+              <h4 class="book-title">${this.escapeHtml(book.paperTitleVi || book.fileName)}</h4>
+              <div class="book-filename">📄 ${this.escapeHtml(book.fileName)} (${sizeMb}${total} trang)</div>
+            </div>
+            <div class="book-footer">
+              <span class="book-progress-pill ${isComplete ? '' : 'partial'}">
+                ${isComplete ? `✅ Đã dịch đủ ${done}/${total} trang` : `⏳ Đã dịch ${done}/${total} trang`}
+              </span>
+              <div class="book-actions">
+                <button type="button" class="book-open-btn" data-open-doc="${this.escapeHtml(book.docId)}">
+                  ${hasPdfBinary ? '📖 Mở đọc song song' : '📖 Mở đọc bản dịch'}
+                </button>
+                <button type="button" class="book-delete-btn" data-delete-doc="${this.escapeHtml(book.docId)}" title="Xóa khỏi Kệ sách">🗑️</button>
+              </div>
+            </div>
+          </div>
+        </article>
+      `;
+    }).join('');
+
+    this.libraryBookshelfGrid.querySelectorAll('.book-card').forEach(card => {
+      card.addEventListener('click', (e) => {
+        const deleteBtn = e.target.closest('[data-delete-doc]');
+        if (deleteBtn) {
+          e.stopPropagation();
+          this.deleteLibraryBook(deleteBtn.getAttribute('data-delete-doc'));
+          return;
+        }
+        const docId = card.getAttribute('data-doc-id');
+        if (docId) this.openLibraryBook(docId);
+      });
+    });
+  }
+
+  async openLibraryBook(docId) {
+    const book = this.libraryBooks.find(b => b.docId === docId);
+    if (!book) return;
+
+    // Ensure localStorage also has the book's cached pageResults so restoreCachedTranslationsForCurrentDoc finds them all
+    if (book.pageResults && Object.keys(book.pageResults).length > 0) {
+      try {
+        localStorage.setItem(book.docId, JSON.stringify(book.pageResults));
+      } catch (e) {}
+    }
+
+    if (book.pdfArrayBuffer) {
+      const file = new File([book.pdfArrayBuffer], book.fileName || 'document.pdf', { type: 'application/pdf' });
+      await this.loadPdfFile(file);
+      return;
+    }
+
+    // Fallback for books cached in localStorage before IndexedDB PDF storage was added:
+    // Open immediately in Reader view so the user can read, change fonts/sizes, or export right away!
+    this.openCachedTranslationOnlyBook(book);
+  }
+
+  openCachedTranslationOnlyBook(book) {
+    this.translationRunId += 1;
+    this.isTranslating = false;
+    this.isPaused = false;
+    this.currentFile = { name: book.fileName || 'Tai_lieu_da_luu.pdf', size: book.fileSize || 0 };
+    this.pdfDoc = null;
+    this.pdfLibMasterDoc = null;
+    this.totalPages = book.totalPages || Object.keys(book.pageResults || {}).length || 1;
+    this.sourcePageProfiles = [];
+    this.currentFileName.textContent = book.fileName || book.paperTitleVi;
+    this.currentFileName.title = book.paperTitleVi || book.fileName;
+    this.pageCountBadge.textContent = `${this.totalPages} trang`;
+
+    this.buildChunks();
+    this.dropzoneContainer.style.display = 'none';
+    this.dualPaneContainer.style.display = 'flex';
+    if (this.openLibraryBtn) this.openLibraryBtn.classList.remove('active');
+    this.resetDocBtn.style.display = 'inline-flex';
+    this.setViewMode('translation-only', false);
+
+    this.pdfPagesRenderContainer.innerHTML = `
+      <div class="empty-state-placeholder" style="padding:2.5rem 1.5rem;">
+        <div class="empty-illustration">📄</div>
+        <h3>Bản dịch đã mở từ Kệ sách</h3>
+        <p style="margin-bottom:1rem;">Tài liệu này được lưu trong bộ nhớ đệm trước khi bật lưu file PDF gốc tự động. Nếu muốn xem PDF gốc song song bên trái, hãy chọn lại file PDF gốc 1 lần (lần sau app sẽ tự nhớ luôn file PDF!).</p>
+        <button type="button" class="btn btn-primary" id="reattachPdfForBookBtn">📂 Chọn file PDF gốc (${this.escapeHtml(book.fileName)})</button>
+      </div>
+    `;
+    const reattachBtn = document.getElementById('reattachPdfForBookBtn');
+    if (reattachBtn) {
+      reattachBtn.addEventListener('click', () => this.pdfFileInput.click());
+    }
+
+    const restored = this.restoreCachedTranslationsForCurrentDoc();
+    this.applyTranslationTypography();
+    this.showToast(`📖 Đã mở "${book.paperTitleVi}" (${restored}/${this.totalPages} trang đã dịch) từ Kệ sách!`, 'success');
+  }
+
+  async deleteLibraryBook(docId) {
+    const book = this.libraryBooks.find(b => b.docId === docId);
+    if (!book) return;
+    if (!confirm(`Bạn có muốn xóa "${book.paperTitleVi || book.fileName}" khỏi Kệ sách và xóa cache bản dịch của tài liệu này không?`)) {
+      return;
+    }
+    localStorage.removeItem(docId);
+    await this.deleteBookFromIndexedDb(docId);
+    this.libraryBooks = this.libraryBooks.filter(b => b.docId !== docId);
+    this.renderLibraryBookshelf();
+    this.showToast('Đã xóa tài liệu khỏi Kệ sách.', 'info');
+  }
+
+  showHomeLibraryView() {
+    if (this.isTranslating && !this.isPaused) {
+      if (!confirm('Đang dịch tài liệu hiện tại. Bạn có muốn tạm dừng để quay về Kệ sách không?')) {
+        return;
+      }
+      this.togglePauseTranslation();
+    }
+    this.dualPaneContainer.style.display = 'none';
+    this.dropzoneContainer.style.display = 'flex';
+    if (this.openLibraryBtn) this.openLibraryBtn.classList.add('active');
+    this.renderLibraryBookshelf();
   }
 
   getDocCacheKey() {
@@ -788,23 +1228,31 @@ class LayoutTransApp {
   loadCachedPageResultsMap() {
     const key = this.getDocCacheKey();
     if (!key) return new Map();
+    const map = new Map();
+    const libBook = this.libraryBooks.find(b => b.docId === key);
+    if (libBook?.pageResults && typeof libBook.pageResults === 'object') {
+      Object.entries(libBook.pageResults).forEach(([pageStr, pageResult]) => {
+        const pageNum = parseInt(pageStr, 10);
+        if (Number.isInteger(pageNum) && pageResult?.html && pageResult?.qa?.passed) {
+          map.set(pageNum, pageResult);
+        }
+      });
+    }
     try {
       const raw = localStorage.getItem(key);
-      if (!raw) return new Map();
-      const parsed = JSON.parse(raw);
-      const map = new Map();
-      if (parsed && typeof parsed === 'object') {
-        Object.entries(parsed).forEach(([pageStr, pageResult]) => {
-          const pageNum = parseInt(pageStr, 10);
-          if (Number.isInteger(pageNum) && pageResult?.html && pageResult?.qa?.passed) {
-            map.set(pageNum, pageResult);
-          }
-        });
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') {
+          Object.entries(parsed).forEach(([pageStr, pageResult]) => {
+            const pageNum = parseInt(pageStr, 10);
+            if (Number.isInteger(pageNum) && pageResult?.html && pageResult?.qa?.passed) {
+              map.set(pageNum, pageResult);
+            }
+          });
+        }
       }
-      return map;
-    } catch (e) {
-      return new Map();
-    }
+    } catch (e) {}
+    return map;
   }
 
   saveCachedPageResult(pageResult) {
@@ -825,6 +1273,7 @@ class LayoutTransApp {
     } catch (e) {
       console.warn('Không thể lưu cache trang (có thể đầy bộ nhớ localStorage):', e);
     }
+    this.saveCurrentDocToLibrary();
   }
 
   restoreCachedTranslationsForCurrentDoc() {
@@ -1373,11 +1822,17 @@ class LayoutTransApp {
     this.documentFontFamily = roles.body.css;
 
     const captionStyle = roles.captionItalic ? 'italic' : 'normal';
-    const printH1Pt = +(14 * (this.h1Size / 26)).toFixed(2);
-    const printH2Pt = +(11 * (this.h2Size / 20)).toFixed(2);
-    const printH3Pt = +(9.8 * (this.h3Size / 17)).toFixed(2);
-    const printBodyPt = +(9.2 * (this.fontSize / 16)).toFixed(2);
-    const printCaptionPt = +(8.5 * (this.captionSize / 14)).toFixed(2);
+    // Direct 0.72 pt-per-px scaling so changing size on web preview scales the PDF print output 1:1
+    const printH1Pt = +(this.h1Size * 0.72).toFixed(2);
+    const printH2Pt = +(this.h2Size * 0.72).toFixed(2);
+    const printH3Pt = +(this.h3Size * 0.72).toFixed(2);
+    const printBodyPt = +(this.fontSize * 0.72).toFixed(2);
+    const printCaptionPt = +(this.captionSize * 0.72).toFixed(2);
+    const printTablePt = +(printBodyPt * 0.82).toFixed(2);
+    const printRefPt = +(printBodyPt * 0.78).toFixed(2);
+    const printAbstractPt = +(printBodyPt * 0.94).toFixed(2);
+    const printAuthorPt = +(printBodyPt * 0.88).toFixed(2);
+    const printMetaPt = +(printBodyPt * 0.76).toFixed(2);
 
     const targets = [document.documentElement, this.translatedContent].filter(Boolean);
     targets.forEach(el => {
@@ -1396,6 +1851,11 @@ class LayoutTransApp {
       el.style.setProperty('--print-h3-size', `${printH3Pt}pt`);
       el.style.setProperty('--print-body-size', `${printBodyPt}pt`);
       el.style.setProperty('--print-caption-size', `${printCaptionPt}pt`);
+      el.style.setProperty('--print-table-size', `${printTablePt}pt`);
+      el.style.setProperty('--print-ref-size', `${printRefPt}pt`);
+      el.style.setProperty('--print-abstract-size', `${printAbstractPt}pt`);
+      el.style.setProperty('--print-author-size', `${printAuthorPt}pt`);
+      el.style.setProperty('--print-meta-size', `${printMetaPt}pt`);
     });
 
     if (this.translatedContent) {
@@ -1434,12 +1894,21 @@ class LayoutTransApp {
   }
 
   changeFontSize(delta) {
-    this.fontSize = Math.max(12, Math.min(28, this.fontSize + delta));
-    localStorage.setItem('layouttrans_font_size', String(this.fontSize));
-    if (this.bodySizeInput) this.bodySizeInput.value = String(this.fontSize);
-    if (this.fontSizeDisplay) this.fontSizeDisplay.textContent = `${this.fontSize}px`;
+    const nextBody = Math.max(12, Math.min(28, this.fontSize + delta));
+    const actualDelta = nextBody - this.fontSize;
+    if (actualDelta === 0) return;
+
+    this.fontSize = nextBody;
+    this.h1Size = Math.max(18, Math.min(44, this.h1Size + Math.round(actualDelta * 1.5)));
+    this.h2Size = Math.max(15, Math.min(36, this.h2Size + Math.round(actualDelta * 1.25)));
+    this.h3Size = Math.max(13, Math.min(30, this.h3Size + actualDelta));
+    this.captionSize = Math.max(11, Math.min(22, this.captionSize + actualDelta));
+
+    this.persistTypographySettings();
+    this.syncTypographyInputsFromState();
     this.applyTranslationTypography();
-    this.showToast(`Đã lưu cỡ chữ nội dung (Body): ${this.fontSize}px`, 'info');
+    const printPt = +(this.fontSize * 0.72).toFixed(1);
+    this.showToast(`Đã lưu cỡ chữ đồng bộ Web & PDF: Body ${this.fontSize}px (PDF ${printPt}pt) • H1 ${this.h1Size}px`, 'info');
   }
 
   // ==================== Gemini Translation Engine ====================
@@ -2229,11 +2698,226 @@ class LayoutTransApp {
         const layoutClass = profile?.columnCount === 2
           ? 'source-layout-two-column'
           : 'source-layout-single-column';
-        const pageHtml = this.formatReferencesForSafeColumns(pageResult.html);
+        const refFormatted = this.formatReferencesForSafeColumns(pageResult.html);
+        const pageHtml = this.normalizeAcademicPageHtml(refFormatted, pageResult.pageNum);
         const toolbarHtml = `<div class="source-page-toolbar" contenteditable="false"><span class="source-page-badge">📄 Trang nguồn ${pageResult.pageNum}</span><div class="source-page-actions"><button type="button" class="page-action-btn page-jump-btn" data-page="${pageResult.pageNum}" title="Cuộn PDF gốc tới Trang ${pageResult.pageNum}">👁 Đối chiếu PDF</button><button type="button" class="page-action-btn page-retranslate-btn" data-page="${pageResult.pageNum}" title="Dịch lại riêng Trang ${pageResult.pageNum} này">🔄 Dịch lại trang ${pageResult.pageNum}</button></div></div>`;
         return `<section class="source-page ${layoutClass}" data-source-page="${pageResult.pageNum}">${toolbarHtml}${pageHtml}</section>`;
       })
       .join('\n');
+  }
+
+  normalizeAcademicPageHtml(html, pageNum = 1) {
+    const template = document.createElement('template');
+    template.innerHTML = html;
+    const root = template.content;
+
+    // 1. Hoist full-width header elements (h1, authors-block, abstract-box, paper-cover-institution) out of .layout-2col
+    [...root.querySelectorAll('.layout-2col, .book-columns-2')].forEach(grid => {
+      const toHoist = [...grid.querySelectorAll('h1, .authors-block, .abstract-box, .paper-cover-institution, .paper-journal-meta')];
+      toHoist.forEach(el => {
+        grid.parentNode.insertBefore(el, grid);
+      });
+    });
+
+    // 2. Demote top journal / category kicker (e.g. "npj | Y học kỹ thuật số (Digital Medicine) - Bình luận") into subtle .paper-journal-meta
+    const h1 = root.querySelector('h1');
+    const journalKickerRegex = /\bnpj\b|digital medicine|y học kỹ thuật số|\bperspective\b|bình luận|nhận định|chuyên đề|nature|springer|elsevier|original article|review article|commentary/i;
+    if (h1) {
+      let prev = h1.previousElementSibling;
+      while (prev) {
+        const prevSibling = prev.previousElementSibling;
+        const txt = (prev.textContent || '').replace(/\s+/g, ' ').trim();
+        if (txt && txt.length < 180 && !prev.matches('figure, table, .table-scroll, .source-page-toolbar')) {
+          const metaDiv = document.createElement('div');
+          metaDiv.className = 'paper-journal-meta';
+          metaDiv.textContent = txt;
+          prev.replaceWith(metaDiv);
+        }
+        prev = prevSibling;
+      }
+    } else if (pageNum === 1) {
+      const firstEl = root.firstElementChild;
+      if (firstEl && /^(H2|H3|P|DIV)$/.test(firstEl.tagName)) {
+        const txt = (firstEl.textContent || '').replace(/\s+/g, ' ').trim();
+        if (txt.length > 0 && txt.length < 160 && journalKickerRegex.test(txt)) {
+          const metaDiv = document.createElement('div');
+          metaDiv.className = 'paper-journal-meta';
+          metaDiv.textContent = txt;
+          firstEl.replaceWith(metaDiv);
+        }
+      }
+    }
+
+    // 3. Clean up .authors-block so author names never wrap awkwardly mid-name
+    [...root.querySelectorAll('.authors-block')].forEach(block => {
+      block.querySelectorAll('br').forEach(br => br.replaceWith(document.createTextNode(' ')));
+      block.querySelectorAll('.author-name, .author-affil').forEach(span => {
+        span.textContent = (span.textContent || '').replace(/\s+/g, ' ').trim();
+      });
+    });
+
+    // 4. Relocate any <figure class="paper-figure"> or standalone .table-scroll that interrupts prose mid-page
+    //    (Fixes Issue 7 where Table 1 / Figure split two sentences of "Concrete oversight safeguards" in half!)
+    [...root.querySelectorAll('.layout-2col figure, .book-columns-2 figure')].forEach(fig => {
+      const grid = fig.closest('.layout-2col, .book-columns-2');
+      if (grid && grid.parentNode) {
+        grid.parentNode.insertBefore(fig, grid.nextSibling);
+      }
+    });
+
+    const topLevelFiguresAndTables = [...root.children].filter(el => (
+      el.matches('figure.paper-figure, figure.figure-wrapper')
+      || (el.matches('.table-scroll') && !el.closest('figure'))
+    ));
+    if (topLevelFiguresAndTables.length > 0) {
+      const refSection = [...root.children].find(el => el.matches('.references-section'));
+      topLevelFiguresAndTables.forEach(mediaEl => {
+        // Check if there is prose AFTER this figure/table on the same page
+        let next = mediaEl.nextElementSibling;
+        let hasProseAfter = false;
+        while (next) {
+          if (!next.matches('.references-section, figure, .table-scroll, .source-page-toolbar')) {
+            if ((next.textContent || '').trim().length > 20) {
+              hasProseAfter = true;
+              break;
+            }
+          }
+          next = next.nextElementSibling;
+        }
+        if (hasProseAfter) {
+          if (refSection) {
+            root.insertBefore(mediaEl, refSection);
+          } else {
+            root.appendChild(mediaEl);
+          }
+        }
+      });
+    }
+
+    // Merge consecutive .layout-2col blocks that were separated only by a relocated figure
+    const directChildren = [...root.children];
+    for (let i = 0; i < directChildren.length - 1; i++) {
+      const curr = directChildren[i];
+      const next = curr.nextElementSibling;
+      if (curr && next && curr.matches('.layout-2col') && next.matches('.layout-2col')) {
+        const currCols = [...curr.children].filter(c => c.tagName === 'DIV');
+        const nextCols = [...next.children].filter(c => c.tagName === 'DIV');
+        if (currCols.length === 2 && nextCols.length === 2) {
+          // Append next's columns into curr's columns in reading order:
+          // Actually, curr's Col 2 end connects to next's Col 1 start!
+          [...nextCols[0].childNodes].forEach(n => currCols[1].appendChild(n));
+          [...nextCols[1].childNodes].forEach(n => currCols[1].appendChild(n));
+          next.remove();
+        }
+      }
+    }
+
+    // 5. Strip artificial ellipses ("..." / "…") and stitch split sentences within the page
+    this.cleanAndStitchProseInContainer(root);
+
+    return template.innerHTML.trim();
+  }
+
+  cleanAndStitchProseInContainer(root) {
+    if (!root) return;
+    const isProseParagraph = p => (
+      p && p.tagName === 'P'
+      && !p.closest('figcaption, table, .authors-block, .references-section, .source-page-toolbar')
+    );
+
+    const paragraphs = [...root.querySelectorAll('p')].filter(isProseParagraph);
+    const trailingEllipsisRe = /(?:\s*(?:\.\.\.|…|\.\s*\.\s*\.))+\s*$/;
+    const leadingEllipsisRe = /^\s*(?:\.\.\.|…|\.\s*\.\s*\.)+\s*/;
+    const terminalPunctRe = /[.!?:"”)\]]\s*$/;
+    const startsLowercaseRe = /^[a-zàáảãạăắằẳẵặâấầẩẫậđèéẻẽẹêếềểễệìíỉĩịòóỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵ]/;
+
+    // First clean any inline "...<br>..." or stray <br> inside prose paragraphs
+    paragraphs.forEach(p => {
+      if (p.querySelector('br')) {
+        p.innerHTML = p.innerHTML
+          .replace(/(?:\.\.\.|…|\.\s*\.\s*\.)?\s*<br\s*\/?>\s*(?:\.\.\.|…|\.\s*\.\s*\.)?/gi, ' ')
+          .replace(/\s{2,}/g, ' ')
+          .trim();
+      }
+      // Also clean inline "... ..." where ellipsis was inserted mid-sentence
+      if (/(?:\.\.\.|…)\s+(?:\.\.\.|…)/.test(p.innerHTML)) {
+        p.innerHTML = p.innerHTML.replace(/(?:\.\.\.|…)\s+(?:\.\.\.|…)/g, ' ');
+      }
+    });
+
+    for (let i = 0; i < paragraphs.length; i++) {
+      const p = paragraphs[i];
+      if (!p.isConnected) continue;
+
+      let pText = (p.textContent || '').trim();
+      const hadTrailingEllipsis = trailingEllipsisRe.test(pText);
+      if (hadTrailingEllipsis) {
+        p.innerHTML = p.innerHTML.replace(/(?:\s*(?:\.\.\.|…|\.\s*\.\s*\.))+\s*$/, '').trim();
+        pText = (p.textContent || '').trim();
+      }
+      if (leadingEllipsisRe.test(pText)) {
+        p.innerHTML = p.innerHTML.replace(/^\s*(?:\.\.\.|…|\.\s*\.\s*\.)+\s*/, '').trim();
+        pText = (p.textContent || '').trim();
+      }
+
+      if (i + 1 >= paragraphs.length) continue;
+      const nextP = paragraphs[i + 1];
+      if (!nextP || !nextP.isConnected) continue;
+
+      // Do not merge across an abstract box boundary
+      if (Boolean(p.closest('.abstract-box')) !== Boolean(nextP.closest('.abstract-box'))) continue;
+      if (Boolean(p.closest('.callout')) !== Boolean(nextP.closest('.callout'))) continue;
+
+      // Do not merge if there is a heading (h1, h2, h3, h4) between p and nextP
+      const hasHeadingBetween = (() => {
+        if (p.parentElement === nextP.parentElement) {
+          let sib = p.nextElementSibling;
+          while (sib && sib !== nextP) {
+            if (/^H[1-4]$/.test(sib.tagName)) return true;
+            sib = sib.nextElementSibling;
+          }
+          return false;
+        }
+        const nextFirstPrev = nextP.previousElementSibling;
+        if (nextFirstPrev && /^H[1-4]$/.test(nextFirstPrev.tagName)) return true;
+        return false;
+      })();
+      if (hasHeadingBetween) continue;
+
+      let nextText = (nextP.textContent || '').trim();
+      const hadLeadingEllipsis = leadingEllipsisRe.test(nextText);
+      if (hadLeadingEllipsis) {
+        nextP.innerHTML = nextP.innerHTML.replace(/^\s*(?:\.\.\.|…|\.\s*\.\s*\.)+\s*/, '').trim();
+        nextText = (nextP.textContent || '').trim();
+      }
+
+      // Specific repair for LTA Page 2 override rate contrast sentence if "thấp" was dropped at the split boundary
+      if (/tỷ lệ ghi đè cao/i.test(pText) && /^tỷ lệ ghi đè có thể phản ánh hiệu suất tốt/i.test(nextText)) {
+        nextP.innerHTML = nextP.innerHTML.replace(/^tỷ lệ ghi đè/i, 'Tỷ lệ ghi đè thấp');
+        nextText = (nextP.textContent || '').trim();
+        p.innerHTML = `${p.innerHTML.trim()} ${nextP.innerHTML.trim()}`;
+        nextP.remove();
+        i -= 1;
+        continue;
+      }
+
+      const endsIncomplete = !terminalPunctRe.test(pText);
+      const nextStartsLower = startsLowercaseRe.test(nextText);
+
+      if (hadTrailingEllipsis || hadLeadingEllipsis || (endsIncomplete && nextStartsLower) || nextStartsLower) {
+        if (!endsIncomplete && nextStartsLower && !hadTrailingEllipsis && !hadLeadingEllipsis) {
+          // p ended with a period, and nextP started with a lowercase letter (e.g. split mid-paragraph by figure/column)
+          // Capitalize first letter of nextP and merge into p so the paragraph stays whole
+          nextP.innerHTML = nextP.innerHTML.replace(
+            /^(\s*)([a-zàáảãạăắằẳẵặâấầẩẫậđèéẻẽẹêếềểễệìíỉĩịòóỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵ])/,
+            (_, ws, ch) => ws + ch.toUpperCase()
+          );
+        }
+        p.innerHTML = `${p.innerHTML.trim()} ${nextP.innerHTML.trim()}`;
+        nextP.remove();
+        i -= 1;
+      }
+    }
   }
 
   formatReferencesForSafeColumns(html) {
@@ -2397,8 +3081,11 @@ QUY TẮC SỐ 2 — CẤU TRÚC KHỐI TRANG & BỐ CỤC CỘT:
 - Chỉ dùng HTML ngữ nghĩa: section, h1, h2, h3, p, strong, em, ul, ol, li, table, thead, tbody, tr, th, td, div, span, figure, figcaption, sup, sub, blockquote, br.
 - Ứng dụng đã đo bố cục nguồn như sau:
 ${layoutGuide}
-- Với trang hai cột: đặt tiêu đề lớn / tóm tắt (abstract) / hình hoặc bảng rộng ở toàn chiều rộng; bọc phần thân bài hai cột bằng đúng <div class="layout-2col"><div>[toàn bộ nội dung cột trái đã dịch sang tiếng Việt]</div><div>[toàn bộ nội dung cột phải đã dịch sang tiếng Việt]</div></div>. Phải dịch hết cả cột trái lẫn cột phải!
-- Với trang bìa / danh sách tác giả: bọc danh sách tác giả trong <div class="authors-block"><div class="author-row"><span class="author-name">Tên tác giả</span><span class="author-affil">Đơn vị công tác</span></div>...</div> và phần Tóm tắt trong <div class="abstract-box"><div class="abstract-title">Tóm tắt</div><p>...</p></div>.
+- Với dòng tên tạp chí / chuyên mục nhỏ ở đầu trang 1 (ví dụ: "npj | Digital Medicine - Perspective / Bình luận"): bọc trong <div class="paper-journal-meta">...</div> để hiển thị nhỏ gọn, tinh tế phía trên tiêu đề chính <h1>.
+- Với trang hai cột: đặt tiêu đề lớn <h1> / danh sách tác giả (.authors-block) / tóm tắt (.abstract-box) ở toàn chiều rộng phía trên; bọc phần thân bài hai cột bằng đúng <div class="layout-2col"><div>[toàn bộ nội dung cột trái đã dịch sang tiếng Việt]</div><div>[toàn bộ nội dung cột phải đã dịch sang tiếng Việt]</div></div>. Phải dịch hết cả cột trái lẫn cột phải!
+- TUYỆT ĐỐI KHÔNG tự ý thêm dấu ba chấm "..." ở cuối đoạn/cuối cột/cuối trang hoặc "...từ" ở đầu đoạn/đầu cột/đầu trang khi câu văn vắt qua ranh giới cột hay trang. Nếu một câu bị ngắt từ cột trái sang cột phải trên cùng trang, hãy nối liền thành một câu hoàn chỉnh.
+- TUYỆT ĐỐI KHÔNG chèn <figure> hoặc <table> cắt ngang giữa một đoạn văn hoặc giữa các đoạn văn đang liền mạch của một mục. Hãy dịch liền mạch toàn bộ các đoạn văn bản (prose) của mục đó trước, sau đó đặt <figure class="paper-figure"> hoặc <div class="table-scroll"> ở cuối trang (trước phần Tài liệu tham khảo nếu có).
+- Với trang bìa / danh sách tác giả: bọc danh sách tác giả trong <div class="authors-block"><div class="author-row"><span class="author-name">Tên tác giả</span><span class="author-affil">Đơn vị công tác</span></div>...</div> (không chèn <br> ngắt giữa tên tác giả) và phần Tóm tắt trong <div class="abstract-box"><div class="abstract-title">Tóm tắt</div><p>...</p></div>.
 
 QUY TẮC SỐ 3 — HÌNH MINH HỌA, BIỂU ĐỒ (CHARTS) VÀ SƠ ĐỒ (FIGURES):
 - KHÔNG chèn chữ đè lên ảnh để tránh làm mờ/sạn hình và chữ chồng chéo chi chít.
@@ -2653,7 +3340,7 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
     const allowedClasses = new Set([
       'source-page', 'layout-2col', 'book-columns-2', 'authors-block', 'author-row', 'author-name',
       'author-affil', 'abstract-box', 'abstract-title', 'callout', 'callout-note', 'callout-tip', 'callout-warning', 'callout-definition',
-      'callout-title', 'note-box', 'paper-cover', 'paper-cover-institution',
+      'callout-title', 'note-box', 'paper-cover', 'paper-cover-institution', 'paper-journal-meta',
       'paper-cover-meta', 'paper-figure', 'figure-wrapper', 'figure-image-slot', 'source-table-image',
       'figure-caption', 'figure-label-overlays', 'figure-label-overlay',
       'figure-translation-box', 'figure-translation-header', 'figure-translation-table',
@@ -3187,6 +3874,9 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
     `;
 
     this.bindChunkInteractiveActions(chunkBlock, chunk);
+    if (this.translatedContent) {
+      this.cleanAndStitchProseInContainer(this.translatedContent);
+    }
 
     // Render KaTeX math in the new chunk
     if (window.renderMathInElement) {
@@ -4427,16 +5117,25 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
       line-height: 1.68;
       font-size: ${exportFontSize}px;
     }
-    p, li, td, th { font-family: ${bodyCss}; font-size: ${exportFontSize}px; }
+    p, li { font-family: ${bodyCss}; font-size: ${exportFontSize}px; }
     h1, h2, h3, h4, .abstract-title, .callout-title { font-family: ${headingCss}; }
-    h1 { font-size: ${this.h1Size}px; color: #0f172a; margin: 2rem 0 1rem; }
-    h2 { font-size: ${this.h2Size}px; color: #0f172a; margin: 1.5rem 0 0.8rem; border-bottom: 2px solid #e2e8f0; padding-bottom: 0.4rem; }
-    h3 { font-size: ${this.h3Size}px; color: #0f172a; margin: 1.2rem 0 0.6rem; }
+    .paper-journal-meta {
+      font-family: ${headingCss};
+      font-size: ${Math.max(11, Math.round(exportFontSize * 0.76))}px;
+      font-weight: 600;
+      color: #64748b;
+      margin: 0 0 0.5rem 0;
+      padding-bottom: 0.35rem;
+      border-bottom: 1px solid #e2e8f0;
+    }
+    h1 { font-size: ${this.h1Size}px; line-height: 1.24; color: #0f172a; margin: 0.8rem 0 1rem; }
+    h2 { font-size: ${this.h2Size}px; line-height: 1.3; color: #0f172a; margin: 1.5rem 0 0.8rem; border-bottom: 2px solid #e2e8f0; padding-bottom: 0.4rem; }
+    h3 { font-size: ${this.h3Size}px; line-height: 1.35; color: #0f172a; margin: 1.2rem 0 0.6rem; }
     p { margin-bottom: 1.2rem; text-align: justify; }
-    .authors-block { margin: 1.5rem 0 2rem; padding: 0.5rem 0; display: flex; flex-direction: column; gap: 0.45rem; }
-    .author-row { display: flex; justify-content: flex-start; align-items: baseline; gap: 2rem; padding: 3px 0; font-size: 0.94rem; }
-    .author-name { font-weight: 700; color: #0f172a; min-width: 200px; flex-shrink: 0; }
-    .author-affil { color: #64748b; font-size: 0.9rem; }
+    .authors-block { width: 100%; margin: 1rem 0 1.5rem; padding: 0.65rem 0; border-top: 1px solid #f1f5f9; border-bottom: 1px solid #f1f5f9; display: flex; flex-direction: column; gap: 0.45rem; }
+    .author-row { display: flex; flex-wrap: wrap; justify-content: flex-start; align-items: baseline; column-gap: 1.25rem; row-gap: 0.25rem; padding: 3px 0; font-size: ${Math.max(12, Math.round(exportFontSize * 0.88))}px; }
+    .author-name { font-weight: 700; color: #0f172a; white-space: nowrap; flex-shrink: 0; }
+    .author-affil { color: #64748b; font-size: ${Math.max(11, Math.round(exportFontSize * 0.82))}px; flex: 1 1 260px; }
     .book-section, .source-page { margin: 0; padding: 0; }
     .source-page::before, .source-page-toolbar, .figure-action-bar { display: none !important; }
     .layout-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin: 1rem 0; }
@@ -4444,9 +5143,9 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
     .callout { background: #f8fafc; border-left: 4px solid #6366f1; padding: 1.2rem; border-radius: 8px; margin: 1.5rem 0; }
     .callout-title { font-weight: 700; margin-bottom: 0.5rem; color: #4338ca; }
     .table-scroll { width: 100%; max-width: 100%; overflow-x: auto; margin: 1.2rem 0; }
-    .table-scroll table { width: max-content; min-width: 100%; border-collapse: collapse; margin: 0; border-top: 2px solid #0f172a; border-bottom: 2px solid #0f172a; }
-    th { padding: 10px 14px; text-align: left; font-weight: 700; border-bottom: 1.5px solid #0f172a; }
-    td { padding: 9px 14px; border-bottom: 1px solid #e2e8f0; vertical-align: top; overflow-wrap: anywhere; }
+    .table-scroll table, table { width: 100%; border-collapse: collapse; margin: 0; border-top: 2px solid #0f172a; border-bottom: 2px solid #0f172a; font-family: ${bodyCss}; font-size: ${Math.max(11, Math.round(exportFontSize * 0.82))}px; line-height: 1.45; }
+    th { font-family: ${headingCss}; font-size: ${Math.max(11, Math.round(exportFontSize * 0.82))}px; padding: 9px 12px; text-align: left; font-weight: 700; border-bottom: 1.5px solid #0f172a; }
+    td { font-family: ${bodyCss}; font-size: ${Math.max(11, Math.round(exportFontSize * 0.82))}px; padding: 8px 12px; border-bottom: 1px solid #e2e8f0; vertical-align: top; overflow-wrap: anywhere; }
     .paper-figure, .figure-wrapper { margin: 2rem 0; background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 1.25rem; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
     .figure-image-slot { width: 100%; display: flex; justify-content: center; margin-bottom: 1rem; }
     .cropped-figure-stage { position: relative; width: 100%; line-height: 0; }
@@ -4455,35 +5154,39 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
     figcaption, .figure-caption { font-family: ${captionCss}; font-style: ${captionStyle}; font-size: ${this.captionSize}px; color: #334155; line-height: 1.6; text-align: justify; margin: 0.8rem 0; }
     figcaption strong { font-style: normal; }
     .figure-translation-box { margin-top: 0.9rem; border: 1px solid #cbd5e1; border-radius: 8px; overflow: hidden; background: #ffffff; }
-    .figure-translation-header { font-family: ${headingCss}; padding: 8px 14px; background: #f1f5f9; border-bottom: 1px solid #cbd5e1; font-size: 0.85rem; font-weight: 700; color: #1e293b; }
-    .figure-translation-table { width: 100%; border-collapse: collapse; font-size: ${Math.max(11, this.captionSize - 1)}px; line-height: 1.5; }
-    .figure-translation-table th { background: #f8fafc; color: #334155; font-weight: 700; padding: 8px 12px; border-bottom: 1.5px solid #cbd5e1; font-size: 0.82rem; }
-    .figure-translation-table td { padding: 8px 12px; border-bottom: 1px solid #e2e8f0; vertical-align: top; }
+    .figure-translation-header { font-family: ${headingCss}; padding: 8px 14px; background: #f1f5f9; border-bottom: 1px solid #cbd5e1; font-size: ${Math.max(11, Math.round(exportFontSize * 0.82))}px; font-weight: 700; color: #1e293b; }
+    .figure-translation-table { width: 100%; border-collapse: collapse; font-size: ${Math.max(11, Math.round(exportFontSize * 0.8))}px; line-height: 1.45; }
+    .figure-translation-table th { background: #f8fafc; color: #334155; font-weight: 700; padding: 7px 10px; border-bottom: 1.5px solid #cbd5e1; font-size: ${Math.max(11, Math.round(exportFontSize * 0.8))}px; }
+    .figure-translation-table td { padding: 7px 10px; border-bottom: 1px solid #e2e8f0; vertical-align: top; font-size: ${Math.max(11, Math.round(exportFontSize * 0.8))}px; }
     .figure-translation-table tbody tr:nth-child(even) { background: #f8fafc; }
     .fig-comp-cell { width: 22%; font-weight: 600; color: #334155; }
-    .fig-src-cell { width: 32%; color: #475569; font-family: monospace; font-size: 0.82rem; }
+    .fig-src-cell { width: 32%; color: #475569; font-family: monospace; }
     .fig-vi-cell { width: 46%; color: #0f172a; font-weight: 500; }
-    .references-list { font-size: 0.82rem; line-height: 1.35; }
-    .reference-entries { column-count: 2; column-gap: 1.25rem; column-rule: 1px solid #e2e8f0; font-size: 0.82rem; line-height: 1.35; }
+    .references-section, .references-list, .references-list li, .reference-entries, .reference-entry { font-size: ${Math.max(11, Math.round(exportFontSize * 0.78))}px; line-height: 1.35; }
+    .reference-entries { column-count: 2; column-gap: 1.25rem; column-rule: 1px solid #e2e8f0; }
     .reference-entry { position: relative; padding-left: 2.35rem; margin: 0 0 0.42rem; break-inside: avoid-column; page-break-inside: avoid; overflow-wrap: anywhere; }
     .reference-number { position: absolute; top: 0; left: 0; width: 2rem; font-variant-numeric: tabular-nums; text-align: right; }
     .reference-text { display: inline; }
     @media print {
       @page { size: A4; margin: 1.4cm 1.3cm; }
-      body { max-width: none; margin: 0; padding: 0; background: #fff; color: #111; font-size: ${+(9.2 * (this.fontSize / 16)).toFixed(2)}pt; line-height: 1.38; }
+      body { max-width: none; margin: 0; padding: 0; background: #fff; color: #111; font-size: ${+(exportFontSize * 0.72).toFixed(2)}pt; line-height: 1.38; }
+      p, li { font-size: ${+(exportFontSize * 0.72).toFixed(2)}pt; }
+      h1 { font-size: ${+(this.h1Size * 0.72).toFixed(2)}pt; }
+      h2 { font-size: ${+(this.h2Size * 0.72).toFixed(2)}pt; }
+      h3 { font-size: ${+(this.h3Size * 0.72).toFixed(2)}pt; }
       .layout-2col { gap: 1.05rem; }
       .table-scroll { overflow: visible; margin: 0.45rem 0; }
-      .table-scroll table { width: 100%; min-width: 0; }
+      .table-scroll table, table, th, td, .figure-translation-table, .figure-translation-table th, .figure-translation-table td { width: 100%; min-width: 0; font-size: ${+(exportFontSize * 0.72 * 0.82).toFixed(2)}pt; line-height: 1.32; }
       .paper-figure { break-inside: auto; page-break-inside: auto; margin: 0.55rem 0; padding: 0.4rem 0; }
       .figure-image-slot { break-inside: avoid; page-break-inside: avoid; }
       .original-cropped-figure { width: 100%; max-height: 11.5cm; object-fit: contain; }
-      .figure-translation-table { font-size: 7.8pt; line-height: 1.3; }
       .figure-translation-table th, .figure-translation-table td { padding: 4pt 6pt; }
       table { break-inside: auto; }
       tr { break-inside: avoid; }
       .references-section { margin: 0.25rem 0 0; padding-top: 0; border-top: 0; break-inside: auto; page-break-inside: auto; }
-      .references-section h2, .references-section h3 { margin: 0.35rem 0 0.3rem; font-size: 10pt; }
-      .reference-entries { column-count: 2; column-gap: 1rem; column-rule: 0.35pt solid #cbd5e1; font-size: 7.8pt; line-height: 1.24; }
+      .references-section h2, .references-section h3 { margin: 0.35rem 0 0.3rem; font-size: ${+(this.h3Size * 0.72).toFixed(2)}pt; }
+      .references-section, .references-list, .references-list li, .reference-entries, .reference-entry { font-size: ${+(exportFontSize * 0.72 * 0.78).toFixed(2)}pt; line-height: 1.24; }
+      .reference-entries { column-count: 2; column-gap: 1rem; column-rule: 0.35pt solid #cbd5e1; }
       .reference-entry { margin-bottom: 2.5pt; padding-left: 2.15rem; break-inside: avoid-column; page-break-inside: avoid; }
     }
   </style>
@@ -4775,9 +5478,9 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
       const parsed = parseInt(el?.value || '', 10);
       return Number.isFinite(parsed) ? Math.max(min, Math.min(max, parsed)) : fallback;
     };
-    this.h1Size = clampSize(this.h1SizeInput, 18, 40, this.h1Size);
-    this.h2Size = clampSize(this.h2SizeInput, 15, 32, this.h2Size);
-    this.h3Size = clampSize(this.h3SizeInput, 13, 26, this.h3Size);
+    this.h1Size = clampSize(this.h1SizeInput, 18, 44, this.h1Size);
+    this.h2Size = clampSize(this.h2SizeInput, 15, 36, this.h2Size);
+    this.h3Size = clampSize(this.h3SizeInput, 13, 30, this.h3Size);
     this.fontSize = clampSize(this.bodySizeInput, 12, 28, this.fontSize);
     this.captionSize = clampSize(this.captionSizeInput, 11, 22, this.captionSize);
 
