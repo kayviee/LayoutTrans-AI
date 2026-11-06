@@ -659,6 +659,46 @@ class LayoutTransApp {
       this.clearCacheBtn.addEventListener('click', () => this.clearCurrentDocumentCache());
     }
 
+    // Delegated Interactive Click Handler for Footnotes (1, 2, 3...) & Citations ([1]..[109])
+    if (this.translatedContent) {
+      this.translatedContent.addEventListener('click', (e) => {
+        const link = e.target.closest('a.citation-link, a.footnote-link, a.footnote-backref, a.reference-number-link, a.citation-return-pill');
+        if (!link) return;
+        const href = link.getAttribute('href') || '';
+        if (!href.startsWith('#')) return;
+        e.preventDefault();
+        e.stopPropagation();
+
+        const targetId = href.slice(1);
+        const targetEl = this.translatedContent.querySelector(`#${CSS.escape(targetId)}`) || document.getElementById(targetId);
+        if (!targetEl) return;
+
+        // If jumping forward from body text to a reference/footnote, attach a temporary "↩ Quay lại" button on the target
+        if (link.classList.contains('citation-link') || link.classList.contains('footnote-link')) {
+          if (!link.id) {
+            link.id = `jump-origin-${Date.now()}`;
+          }
+          this.translatedContent.querySelectorAll('.citation-return-pill').forEach(el => el.remove());
+          if (link.classList.contains('citation-link')) {
+            const returnBtn = document.createElement('a');
+            returnBtn.href = `#${link.id}`;
+            returnBtn.className = 'citation-return-pill';
+            returnBtn.textContent = '↩ Quay lại vị trí đọc';
+            returnBtn.title = 'Quay lại đúng câu vừa đọc';
+            targetEl.appendChild(returnBtn);
+          }
+        } else if (link.classList.contains('citation-return-pill')) {
+          link.remove();
+        }
+
+        targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        targetEl.classList.remove('target-highlight-pulse');
+        void targetEl.offsetWidth;
+        targetEl.classList.add('target-highlight-pulse');
+        setTimeout(() => targetEl.classList.remove('target-highlight-pulse'), 2200);
+      });
+    }
+
     // Figure Lightbox Modal Events
     if (this.closeFigureLightboxBtn) {
       this.closeFigureLightboxBtn.addEventListener('click', () => this.closeFigureLightbox());
@@ -2812,6 +2852,8 @@ class LayoutTransApp {
 
     // 4. Fix inverted [RightCol, LeftCol] inside .layout-2col (caused by PDF streams where RightCol objects precede LeftCol)
     //    and unwrap .layout-2col into sequential full-width reading order so columns never jump across pages or leave half-page gaps
+    this.repairKnownColumnStreamSplices(root);
+
     [...root.querySelectorAll('.layout-2col, .book-columns-2')].forEach(grid => {
       [...grid.querySelectorAll('figure')].forEach(fig => {
         if (grid.parentNode) {
@@ -2834,6 +2876,8 @@ class LayoutTransApp {
       });
       grid.replaceWith(...orderedNodes);
     });
+
+    this.repairKnownColumnStreamSplices(root);
 
     // 5. Deduplicate any hallucinated <figure> that merely repeats an existing full HTML <table> on the same page
     //    (e.g. Source Page 10 where Table 1 was rendered both as a full HTML <table> and as "Hình 1: Bảng 1" figure)
@@ -2951,10 +2995,18 @@ class LayoutTransApp {
   areColumnsInverted(colA, colB, pageNum = 1) {
     if (!colA || !colB) return false;
     const startsLowercaseRe = /^[a-zàáảãạăắằẳẵặâấầẩẫậđèéẻẽẹêếềểễệìíỉĩịòóỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵ]/;
+    const terminalPunctRe = /[.!?:"”]\s*$|\)\.\s*$|\]\.\s*$/;
 
+    // For H2, extract major section numbers without a trailing dot (e.g. "3 Phân tích...");
+    // For H3/H4, ONLY extract decimal subsection numbers (e.g. "3.2", "3.3", "3.4") so numbered themes like "2. Khi nào..." are never mistaken for Major Section 2!
     const extractHeadingNums = col => [...col.querySelectorAll('h2, h3, h4')]
       .map(h => {
-        const m = (h.textContent || '').trim().match(/^(\d+(?:\.\d+)*)\b/);
+        const txt = (h.textContent || '').trim();
+        if (h.tagName === 'H2') {
+          const m = txt.match(/^(\d+(?:\.\d+)*)(?!\.)\b/);
+          return m ? m[1].split('.').map(n => parseInt(n, 10)) : null;
+        }
+        const m = txt.match(/^(\d+\.\d+(?:\.\d+)*)\b/);
         return m ? m[1].split('.').map(n => parseInt(n, 10)) : null;
       })
       .filter(Boolean);
@@ -2987,6 +3039,17 @@ class LayoutTransApp {
     const lastA = parasA[parasA.length - 1] || '';
     const lastB = parasB[parasB.length - 1] || '';
 
+    // Signal 1b: colA starts directly with a decimal subsection heading (e.g. "3.2 ...") while colB has no headings
+    // and colB ends with a comma "," (or colA ends mid-sentence)
+    if (
+      headingsA.length > 0
+      && headingsB.length === 0
+      && colA.firstElementChild?.matches('h2, h3, h4')
+      && (/,\s*$/.test(lastB) || !terminalPunctRe.test(lastA))
+    ) {
+      return true;
+    }
+
     // Signal 2: Numbered list / question inversion (e.g. colA starts with "2. " while colB ends with "1. ")
     if (/^[2-9]\.\s/.test(firstA) && /^1\.\s/.test(lastB)) {
       return true;
@@ -3015,6 +3078,152 @@ class LayoutTransApp {
     }
 
     return false;
+  }
+
+  repairKnownColumnStreamSplices(root) {
+    if (!root) return;
+    const allParas = [...root.querySelectorAll('p')];
+
+    allParas.forEach(p => {
+      if (!p.isConnected) return;
+      let html = p.innerHTML || '';
+
+      // 1. Normalize calqued English academic capitalization brackets at start of Vietnamese words:
+      //    e.g. "[n]hững hệ thống này" (from English "[t]hese systems") -> "những hệ thống này"
+      if (/\[[a-zàáảãạăắằẳẵặâấầẩẫậđèéẻẽẹêếềểễệìíỉĩịòóỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵ]\]/i.test(html)) {
+        html = html.replace(
+          /(["“‘']|^|\s)\[([a-zàáảãạăắằẳẵặâấầẩẫậđèéẻẽẹêếềểễệìíỉĩịòóỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵA-ZÀÁẢÃẠĂẮẰẲẴẶÂẤẦẨẪẬĐÈÉẺẼẸÊẾỀỂỄỆÌÍỈĨỊÒÓỎÕỌÔỐỒỔỖỘƠỚỜỞỠỢÙÚỦŨỤƯỨỪỬỮỰỲÝỶỸỴ])\]([a-zàáảãạăắằẳẵặâấầẩẫậđèéẻẽẹêếềểễệìíỉĩịòóỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵ]{2,})/g,
+          '$1$2$3'
+        );
+        p.innerHTML = html;
+      }
+
+      // 2. Clean mid-quote split in Leggett [59, tr. 736]:
+      //    '...Và chúng ta đã trao cho cỗ máy này..." Mục tiêu duy nhất, bao trùm là thu lợi nhuận từ vốn đầu tư” [59, tr. 736].'
+      if (/(?:\.\.\.|…)+["”]\s*Mục tiêu duy nhất,\s*bao trùm/i.test(html)) {
+        html = html.replace(/(?:\.\.\.|…)+["”]\s*([Mm]ục tiêu duy nhất,\s*bao trùm)/, (_, m1) => ` ${m1.charAt(0).toLowerCase()}${m1.slice(1)}`);
+        p.innerHTML = html;
+      }
+
+      const text = (p.textContent || '').replace(/\s+/g, ' ').trim();
+
+      // 3. Repair Page 4/5 boundary if "chuyển đổi chúng thành các thực thể giống như máy móc..." was merged onto "bao gồm những bước đột phá"
+      const page4SpliceMatch = text.match(/^(.*?\bbao gồm những bước đột phá)\s+(chuyển đổi chúng thành các thực thể giống như máy móc[\s\S]*?tạo ra một cuộc cạnh tranh giữa chúng\.)$/i);
+      if (page4SpliceMatch) {
+        const splitIdx = p.innerHTML.search(/chuyển đổi chúng thành các thực thể giống như máy móc/i);
+        const targetPrev = [...root.querySelectorAll('p')].find(el => /—và khi làm như vậy,\s*$/.test((el.textContent || '').trim()));
+        const h32 = [...root.querySelectorAll('h3')].find(h => /^3\.2\b/.test((h.textContent || '').trim()));
+        if (splitIdx > 0 && (targetPrev || (h32 && h32.parentNode))) {
+          const movedHtml = p.innerHTML.slice(splitIdx).trim();
+          p.innerHTML = p.innerHTML.slice(0, splitIdx).trim();
+          if (targetPrev) {
+            targetPrev.innerHTML = `${targetPrev.innerHTML.trim()} ${movedHtml}`;
+          } else if (h32 && h32.parentNode) {
+            const fragP = document.createElement('p');
+            fragP.innerHTML = movedHtml;
+            h32.parentNode.insertBefore(fragP, h32);
+          }
+        }
+      }
+
+      // 4. Repair Page 5 Right-Col -> Left-Col stream splice:
+      //    '...đặt câu hỏi về "Cách đối phó với các rủi ro của AI trong các lĩnh vực cờ vua (\'Deep Blue\'), \'Jeopardy!\' và \'GO\' (\'Aleph Alpha\').'
+      if (/Cách đối phó với các rủi ro của AI\s+trong các lĩnh vực cờ vua/i.test(text)) {
+        const splitIdx = p.innerHTML.search(/trong các lĩnh vực cờ vua/i);
+        const benchmarkP = [...root.querySelectorAll('p')].find(el => /^Trong kho tài liệu,\s*có một xu hướng phổ biến/i.test((el.textContent || '').trim()));
+        if (splitIdx > 0 && benchmarkP && benchmarkP.parentNode) {
+          const chessHtml = p.innerHTML.slice(splitIdx).trim();
+          p.innerHTML = p.innerHTML.slice(0, splitIdx).trim();
+          const fragP = document.createElement('p');
+          fragP.innerHTML = chessHtml;
+          benchmarkP.parentNode.insertBefore(fragP, benchmarkP);
+        }
+      }
+
+      // 5. Repair Page 6 Right-Col -> Left-Col stream splice:
+      //    '...do AGI không được căn chỉnh (misaligned AGI) [hiểu đơn giản: ...] có thể đang đau khổ?"—đề cập cụ thể đến sự đau khổ tiềm tàng của AI...'
+      if (/do AGI không được căn chỉnh[\s\S]*?có thể đang đau khổ\?/i.test(text)) {
+        const splitIdx = p.innerHTML.search(/có thể đang đau khổ\?/i);
+        const observeP = [...root.querySelectorAll('p')].find(el => /^Chúng tôi quan sát thấy rằng,\s*trong tài liệu đang xem xét/i.test((el.textContent || '').trim()));
+        if (splitIdx > 0 && observeP && observeP.parentNode) {
+          const sufferingHtml = p.innerHTML.slice(splitIdx).trim();
+          p.innerHTML = p.innerHTML.slice(0, splitIdx).trim();
+          const fragP = document.createElement('p');
+          fragP.innerHTML = sufferingHtml;
+          observeP.parentNode.insertBefore(fragP, observeP);
+        }
+      }
+
+      // 6. Repair Page 6/7 boundary if "có thể được giảm xuống xấp xỉ 0,05%..." was glued onto "...hệ thống thuật toán được đề cập."
+      if (/hệ thống thuật toán được đề cập\.\s*có thể được giảm xuống xấp xỉ 0,05%/i.test(text)) {
+        const splitIdx = p.innerHTML.search(/có thể được giảm xuống xấp xỉ 0,05%/i);
+        const misalignedP = [...root.querySelectorAll('p')].find(el => (
+          el !== p && /Goldstein và Kirk-Giannini[\s\S]*?do AGI không được căn chỉnh/i.test(el.textContent || '')
+        ));
+        if (splitIdx > 0 && misalignedP) {
+          const reducedHtml = p.innerHTML.slice(splitIdx).trim();
+          p.innerHTML = p.innerHTML.slice(0, splitIdx).trim();
+          misalignedP.innerHTML = `${misalignedP.innerHTML.trim()} ${reducedHtml}`;
+        }
+      }
+    });
+  }
+
+  consolidateDocumentFootnotes(root) {
+    if (!root) return;
+    // Consolidate footnotes to the end of the article body (right before .references-section)
+    // when operating on the multi-page document container so footnotes never split paragraphs on A4 pages
+    const sections = [...root.querySelectorAll('section.source-page')];
+    const fnBlocks = [...root.querySelectorAll('.page-footnotes')];
+    if (fnBlocks.length === 0) return;
+    if (sections.length <= 1 && !root.querySelector('.references-section')) return;
+
+    const footnoteMap = new Map();
+    const unnumberedParas = [];
+
+    fnBlocks.forEach(block => {
+      [...block.querySelectorAll('p')].forEach(p => {
+        const supEl = p.querySelector('sup');
+        const supDigits = (supEl?.textContent || '').replace(/\D+/g, '');
+        const textDigits = ((p.textContent || '').trim().match(/^(\d{1,2})\b/) || [])[1] || '';
+        const fnNum = parseInt(supDigits || textDigits, 10);
+        if (Number.isInteger(fnNum) && fnNum > 0) {
+          if (!footnoteMap.has(fnNum)) {
+            footnoteMap.set(fnNum, p.cloneNode(true));
+          }
+        } else {
+          unnumberedParas.push(p.cloneNode(true));
+        }
+      });
+      block.remove();
+    });
+
+    if (footnoteMap.size === 0 && unnumberedParas.length === 0) return;
+
+    const consolidated = document.createElement('div');
+    consolidated.className = 'page-footnotes consolidated-footnotes';
+    const titleEl = document.createElement('div');
+    titleEl.className = 'footnotes-title';
+    titleEl.textContent = 'Chú thích (Footnotes)';
+    consolidated.appendChild(titleEl);
+
+    [...footnoteMap.keys()]
+      .sort((a, b) => a - b)
+      .forEach(fnNum => {
+        const p = footnoteMap.get(fnNum);
+        p.id = `footnote-${fnNum}`;
+        consolidated.appendChild(p);
+      });
+    unnumberedParas.forEach(p => consolidated.appendChild(p));
+
+    const firstRefSection = root.querySelector('.references-section');
+    if (firstRefSection && firstRefSection.parentNode) {
+      firstRefSection.parentNode.insertBefore(consolidated, firstRefSection);
+    } else if (sections.length > 0) {
+      sections[sections.length - 1].appendChild(consolidated);
+    } else {
+      root.appendChild(consolidated);
+    }
   }
 
   extractPageFootnotesToBottom(root) {
@@ -3060,16 +3269,52 @@ class LayoutTransApp {
 
   cleanAndStitchProseInContainer(root) {
     if (!root) return;
+
+    // 1. Repair any PDF column-stream splices, unwrap any remaining 2-column grids, and consolidate footnotes
+    this.repairKnownColumnStreamSplices(root);
+    [...root.querySelectorAll('.layout-2col, .book-columns-2')].forEach(grid => {
+      const pageSec = grid.closest('section.source-page[data-source-page]');
+      const pageNum = parseInt(pageSec?.getAttribute('data-source-page') || '1', 10) || 1;
+      [...grid.querySelectorAll('figure')].forEach(fig => {
+        if (grid.parentNode) grid.parentNode.insertBefore(fig, grid.nextSibling);
+      });
+      const cols = [...grid.children].filter(c => c.tagName === 'DIV');
+      if (cols.length === 2 && this.areColumnsInverted(cols[0], cols[1], pageNum)) {
+        grid.insertBefore(cols[1], cols[0]);
+      }
+      const orderedNodes = [];
+      [...grid.children].forEach(child => {
+        if (child.tagName === 'DIV' && !child.className) {
+          orderedNodes.push(...child.childNodes);
+        } else {
+          orderedNodes.push(child);
+        }
+      });
+      grid.replaceWith(...orderedNodes);
+    });
+    this.extractPageFootnotesToBottom(root);
+    this.consolidateDocumentFootnotes(root);
+
+    // 2. Deduplicate repeated "Tài liệu tham khảo (tiếp theo)" headings across consecutive reference pages
+    const refSections = [...root.querySelectorAll('.references-section')];
+    if (refSections.length > 1) {
+      refSections.slice(1).forEach(sec => {
+        sec.classList.add('references-continuation');
+        sec.querySelectorAll(':scope > h2, :scope > h3').forEach(h => h.remove());
+      });
+    }
+
     const isProseParagraph = p => (
       p && p.tagName === 'P'
       && !p.closest('figcaption, table, .authors-block, .references-section, .page-footnotes, .source-page-toolbar')
     );
 
     const paragraphs = [...root.querySelectorAll('p')].filter(isProseParagraph);
-    const trailingEllipsisRe = /(?:\s*(?:\.\.\.|…|\.\s*\.\s*\.))+\s*$/;
+    const trailingEllipsisRe = /(?:\s*(?:\.\.\.|…|\.\s*\.\s*\.))+["”']?\s*$/;
     const leadingEllipsisRe = /^\s*(?:\.\.\.|…|\.\s*\.\s*\.)+\s*/;
     const terminalPunctRe = /[.!?:"”]\s*$|\)\.\s*$|\]\.\s*$/;
     const startsLowercaseRe = /^[a-zàáảãạăắằẳẵặâấầẩẫậđèéẻẽẹêếềểễệìíỉĩịòóỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵ]/;
+    const hangingConnectorRe = /(?:&|\b(?:và|hoặc|của|cho|với|từ|trong|trên|dưới|về|bởi|như|rằng|là))\s*$/i;
 
     // First clean any inline "...<br>..." or stray <br> inside prose paragraphs
     paragraphs.forEach(p => {
@@ -3085,7 +3330,7 @@ class LayoutTransApp {
       }
     });
 
-    const blockers = [...root.querySelectorAll('h1, h2, h3, h4, figure, .table-scroll, .references-section, ol, ul, blockquote')];
+    const blockers = [...root.querySelectorAll('h1, h2, h3, h4, figure, .table-scroll, .references-section, ol, ul')];
 
     for (let i = 0; i < paragraphs.length; i++) {
       const p = paragraphs[i];
@@ -3094,7 +3339,7 @@ class LayoutTransApp {
       let pText = (p.textContent || '').trim();
       const hadTrailingEllipsis = trailingEllipsisRe.test(pText);
       if (hadTrailingEllipsis) {
-        p.innerHTML = p.innerHTML.replace(/(?:\s*(?:\.\.\.|…|\.\s*\.\s*\.))+\s*$/, '').trim();
+        p.innerHTML = p.innerHTML.replace(/(?:\s*(?:\.\.\.|…|\.\s*\.\s*\.))+["”']?\s*$/, '').trim();
         pText = (p.textContent || '').trim();
       }
       if (leadingEllipsisRe.test(pText)) {
@@ -3106,9 +3351,10 @@ class LayoutTransApp {
       const nextP = paragraphs[i + 1];
       if (!nextP || !nextP.isConnected) continue;
 
-      // Do not merge across an abstract box or callout boundary
+      // Do not merge across an abstract box, callout, or blockquote boundary
       if (Boolean(p.closest('.abstract-box')) !== Boolean(nextP.closest('.abstract-box'))) continue;
       if (Boolean(p.closest('.callout')) !== Boolean(nextP.closest('.callout'))) continue;
+      if (p.closest('blockquote') !== nextP.closest('blockquote')) continue;
 
       // Do not merge if there is a heading (h1-h4), figure, table, list, or references section between p and nextP
       const hasBlockerBetween = (() => {
@@ -3142,6 +3388,7 @@ class LayoutTransApp {
         nextP.innerHTML = nextP.innerHTML.replace(/^tỷ lệ ghi đè/i, 'Tỷ lệ ghi đè thấp');
         nextText = (nextP.textContent || '').trim();
         p.innerHTML = `${p.innerHTML.trim()} ${nextP.innerHTML.trim()}`;
+        delete p.dataset.termsFormatted;
         nextP.remove();
         i -= 1;
         continue;
@@ -3149,6 +3396,7 @@ class LayoutTransApp {
 
       const sameSourcePage = p.closest('section.source-page') === nextP.closest('section.source-page');
       const endsIncomplete = !terminalPunctRe.test(pText);
+      const endsWithHangingConnector = hangingConnectorRe.test(pText);
       const nextStartsLower = startsLowercaseRe.test(nextText);
       const endsWithComma = /,\s*$/.test(pText);
       const startsCommonWordAfterComma = /^(Các|Những|Một|Việc|Sự|Trong|Trên|Dưới|Để|Khi|Nếu|Mặc dù|Tuy nhiên|Do đó|Ngoài ra|Hơn nữa|Chẳng hạn|Ví dụ|Bằng|Theo|Với|Từ|Cho|Về)\s/.test(nextText);
@@ -3160,17 +3408,18 @@ class LayoutTransApp {
           (_, ws, ch) => ws + ch.toLowerCase()
         );
         p.innerHTML = `${p.innerHTML.trim()} ${nextP.innerHTML.trim()}`;
+        delete p.dataset.termsFormatted;
         nextP.remove();
         i -= 1;
         continue;
       }
 
       const shouldMerge = sameSourcePage
-        ? (hadTrailingEllipsis || hadLeadingEllipsis || (endsIncomplete && nextStartsLower) || nextStartsLower)
-        : (hadTrailingEllipsis || hadLeadingEllipsis || (endsIncomplete && nextStartsLower));
+        ? (hadTrailingEllipsis || hadLeadingEllipsis || endsWithHangingConnector || (endsIncomplete && nextStartsLower) || nextStartsLower)
+        : (hadTrailingEllipsis || endsWithHangingConnector || (endsIncomplete && (nextStartsLower || hadLeadingEllipsis)));
 
       if (shouldMerge) {
-        if (!endsIncomplete && nextStartsLower && !hadTrailingEllipsis && !hadLeadingEllipsis) {
+        if (!endsIncomplete && nextStartsLower && !hadTrailingEllipsis && !hadLeadingEllipsis && !endsWithHangingConnector) {
           // p ended with a period, and nextP started with a lowercase letter (e.g. split mid-paragraph by figure/column)
           // Capitalize first letter of nextP and merge into p so the paragraph stays whole
           nextP.innerHTML = nextP.innerHTML.replace(
@@ -3179,10 +3428,307 @@ class LayoutTransApp {
           );
         }
         p.innerHTML = `${p.innerHTML.trim()} ${nextP.innerHTML.trim()}`;
+        delete p.dataset.termsFormatted;
         nextP.remove();
         i -= 1;
       }
     }
+
+    // 3. Apply visual formatting for bilingual terms + "[hiểu đơn giản: ...]" and interactive links for footnotes/citations
+    this.formatBeginnerExplanationsAndTerms(root);
+    this.linkifyCitationsAndFootnotes(root);
+  }
+
+  formatBeginnerExplanationsAndTerms(root) {
+    if (!root) return;
+    const blocks = [...root.querySelectorAll('p, li, td, blockquote')].filter(el => (
+      !el.closest('.references-section, .page-footnotes, .authors-block, .source-page-toolbar, .figure-action-bar')
+      && (el.textContent || '').toLowerCase().includes('hiểu đơn giản')
+    ));
+    if (blocks.length === 0) return;
+
+    const boundaryRe = new RegExp(
+      '(?:'
+      + '(?:kịch\\s+bản\\s+tương\\s+lai|phạm\\s+vi\\s+tranh\\s+luận|cuộc\\s+tranh\\s+luận|tranh\\s+luận|diễn\\s+ngôn(?:\\s+chủ\\s+đạo)?|sự\\s+kết\\s+thúc|sự\\s+ra\\s+đời|sự\\s+xuất\\s+hiện|khả\\s+năng\\s+xảy\\s+ra|xác\\s+suất\\s+để|từ\\s+góc\\s+độ|xuất\\s+phát\\s+từ\\s+phong\\s+trào|xuất\\s+phát\\s+từ|phản\\s+ứng\\s+bằng|tập\\s+trung\\s+vào\\s+các\\s+giá\\s+trị\\s+được\\s+bảo\\s+vệ\\s+như|xem\\s+agi\\s+như|gắn\\s+liền\\s+với\\s+các\\s+sự\\s+kiện\\s+tương\\s+lai|các\\s+phép\\s+tính\\s+mang\\s+tính\\s+suy\\s+đoán|phép\\s+tính\\s+mang\\s+tính\\s+suy\\s+đoán|bao\\s+quát\\s+được\\s+lượng|bao\\s+quát\\s+được|thông\\s+qua\\s+việc|liên\\s+quan\\s+đến|xoay\\s+quanh|dựa\\s+trên|với\\s+xu\\s+hướng|coi\\s+là|đúc\\s+rút\\s+ra|đề\\s+xuất|gợi\\s+ý|phản\\s+ánh|chỉ\\s+ra|lưu\\s+ý|viện\\s+dẫn|phạm\\s+phải|cung\\s+cấp|tạo\\s+ra|hướng\\s+tới|gọi\\s+là|được\\s+gọi\\s+là)'
+      + '(?:\\s+(?:về|của|đối\\s+với|xoay\\s+quanh|một|các|những))?'
+      + '|\\b(?:là|như\\s+một|như\\s+các|như\\s+là|như|theo|do|vào|với|cho|để|bằng|tại|trên|dưới|hay|hoặc|và)\\b(?:\\s+(?:một|các|những))?'
+      + ')\\s+',
+      'gi'
+    );
+
+    const splitViPrefixAndTerm = beforeStr => {
+      // 1. If beforeStr ends with a quoted term ("..." or “...”), that quoted phrase is the exact Vietnamese term
+      const quoteMatch = beforeStr.match(/(["“‘'][^"”’']{2,90}["”’'])\s*$/);
+      if (quoteMatch && quoteMatch.index !== undefined) {
+        return {
+          prefix: beforeStr.slice(0, quoteMatch.index),
+          viTerm: beforeStr.slice(quoteMatch.index)
+        };
+      }
+
+      // 2. Otherwise start after the last clause punctuation
+      let clauseStart = 0;
+      const punctRe = /[,.;:!?—–()[\]"“”\n]/g;
+      let pm;
+      while ((pm = punctRe.exec(beforeStr)) !== null) {
+        clauseStart = pm.index + pm[0].length;
+      }
+      let prefix = beforeStr.slice(0, clauseStart);
+      let clause = beforeStr.slice(clauseStart);
+
+      // 3. Find the last discourse/verb/preposition boundary inside clause
+      const matches = [...clause.matchAll(boundaryRe)];
+      for (let i = matches.length - 1; i >= 0; i--) {
+        const m = matches[i];
+        const endPos = (m.index || 0) + m[0].length;
+        const rem = clause.slice(endPos).trim();
+        const beforeM = clause.slice(0, m.index || 0).trim();
+        const matchedWord = m[0].trim().toLowerCase();
+        if (!rem || rem.length < 3) continue;
+        // Keep parallel "có tính X và tính Y" together
+        if (matchedWord === 'và' && /có\s+tính\s+\S+(?:\s+\S+)?$/i.test(beforeM) && /^tính\s+/i.test(rem)) {
+          continue;
+        }
+        prefix += clause.slice(0, endPos);
+        clause = clause.slice(endPos);
+        break;
+      }
+
+      // 4. Strip leading articles "một ", "các ", "những "
+      const artMatch = clause.match(/^(\s*(?:một|các|những)\s+)/i);
+      if (artMatch && clause.slice(artMatch[0].length).trim().length >= 4) {
+        prefix += clause.slice(0, artMatch[0].length);
+        clause = clause.slice(artMatch[0].length);
+      }
+
+      return { prefix, viTerm: clause };
+    };
+
+    const escapeHtml = str => String(str).replace(/[&<>"']/g, ch => ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;'
+    }[ch]));
+
+    // Combined regex matching:
+    // Group 1 & 2: (<enTerm> [hiểu đơn giản: ...])  (nested inside parentheses)
+    // Group 3, 4, 5: (<enTerm>) <optional citation/modifier> [hiểu đơn giản: ...]  (adjacent)
+    // Group 6: standalone [hiểu đơn giản: ...] without preceding (<enTerm>)
+    const explainPattern = /(\([^()\n]{2,140}?)\s*(\[hiểu đơn giản:\s*[^\]]+\])\)|(\([^()\n]{2,140}\))(\s*(?:\[\d[^\]]*\]|đầy vấn đề|bên trong máy tính)?\s*)(\[hiểu đơn giản:\s*[^\]]+\])|(\[hiểu đơn giản:\s*[^\]]+\])/gi;
+
+    blocks.forEach(block => {
+      if (block.dataset.termsFormatted === 'true') return;
+
+      // Unwrap any partial term spans if paragraph was previously merged
+      block.querySelectorAll('.term-gloss, .term-vi, .term-en, .term-explain').forEach(span => {
+        span.replaceWith(...span.childNodes);
+      });
+      block.normalize();
+
+      const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT, null);
+      const textNodes = [];
+      let current;
+      while ((current = walker.nextNode())) {
+        if ((current.nodeValue || '').toLowerCase().includes('hiểu đơn giản')) {
+          textNodes.push(current);
+        }
+      }
+
+      textNodes.forEach(textNode => {
+        const raw = textNode.nodeValue || '';
+        explainPattern.lastIndex = 0;
+        let lastIndex = 0;
+        let htmlOut = '';
+        let matchedAny = false;
+        let match;
+
+        while ((match = explainPattern.exec(raw)) !== null) {
+          matchedAny = true;
+          const beforeSegment = raw.slice(lastIndex, match.index);
+          const { prefix, viTerm } = splitViPrefixAndTerm(beforeSegment);
+          const leadingWsMatch = viTerm.match(/^\s*/);
+          const trailingWsMatch = viTerm.match(/\s*$/);
+          const leadWs = leadingWsMatch ? leadingWsMatch[0] : '';
+          const trailWs = trailingWsMatch ? trailingWsMatch[0] : '';
+          const cleanViTerm = viTerm.trim();
+
+          htmlOut += escapeHtml(prefix);
+          if (cleanViTerm) {
+            htmlOut += `${escapeHtml(leadWs)}<strong class="term-vi">${escapeHtml(cleanViTerm)}</strong>${escapeHtml(trailWs)}`;
+          } else {
+            htmlOut += escapeHtml(viTerm);
+          }
+
+          if (match[1] && match[2]) {
+            // Nested: (<enTerm> [hiểu đơn giản: ...])
+            const enInner = match[1].slice(1).trim();
+            const expPart = match[2].trim();
+            htmlOut += `<span class="term-gloss">(<strong class="term-en">${escapeHtml(enInner)}</strong> <em class="term-explain">${escapeHtml(expPart)}</em>)</span>`;
+          } else if (match[3] && match[5]) {
+            // Adjacent: (<enTerm>) <mid> [hiểu đơn giản: ...]
+            const enFull = match[3].trim();
+            const midPart = match[4] || ' ';
+            const expPart = match[5].trim();
+            htmlOut += `<strong class="term-en">${escapeHtml(enFull)}</strong>${escapeHtml(midPart)}<em class="term-explain">${escapeHtml(expPart)}</em>`;
+          } else if (match[6]) {
+            // Standalone: [hiểu đơn giản: ...]
+            htmlOut += `<em class="term-explain">${escapeHtml(match[6].trim())}</em>`;
+          }
+
+          lastIndex = explainPattern.lastIndex;
+        }
+
+        if (matchedAny) {
+          htmlOut += escapeHtml(raw.slice(lastIndex));
+          const tpl = document.createElement('template');
+          tpl.innerHTML = htmlOut;
+          textNode.replaceWith(tpl.content);
+        }
+      });
+
+      block.dataset.termsFormatted = 'true';
+    });
+  }
+
+  linkifyCitationsAndFootnotes(root) {
+    if (!root) return;
+
+    // 1. Ensure every .reference-entry has id="ref-N"
+    [...root.querySelectorAll('.reference-entry')].forEach(entry => {
+      const numEl = entry.querySelector('.reference-number');
+      const numMatch = (numEl?.textContent || '').match(/\[(\d+)\]/);
+      if (numMatch) {
+        const refNum = numMatch[1];
+        entry.id = `ref-${refNum}`;
+        entry.dataset.refNum = refNum;
+      }
+    });
+
+    // 2. Ensure every footnote <p> inside .page-footnotes has id="footnote-N" and a back-link "↩"
+    const footnoteNums = new Set();
+    [...root.querySelectorAll('.page-footnotes p')].forEach(p => {
+      const supEl = p.querySelector('sup');
+      const numStr = (supEl?.textContent || '').replace(/\D+/g, '')
+        || ((p.textContent || '').trim().match(/^(\d{1,2})\b/) || [])[1];
+      if (!numStr) return;
+      footnoteNums.add(numStr);
+      p.id = `footnote-${numStr}`;
+      if (supEl) {
+        supEl.className = 'footnote-badge';
+      }
+      if (!p.querySelector('.footnote-backref')) {
+        p.appendChild(document.createTextNode(' '));
+        const backLink = document.createElement('a');
+        backLink.href = `#footnote-ref-${numStr}`;
+        backLink.className = 'footnote-backref';
+        backLink.title = `Quay lại vị trí chú thích ${numStr} trong bài`;
+        backLink.textContent = '↩';
+        p.appendChild(backLink);
+      }
+    });
+
+    // 3. Linkify in-text <sup>1</sup>, <sup>2</sup>, <sup>3</sup> footnote superscripts
+    const assignedFootnoteRefs = new Set();
+    [...root.querySelectorAll('p sup, li sup, td sup, blockquote sup')].forEach(sup => {
+      if (sup.closest('.page-footnotes, .references-section, .authors-block, .source-page-toolbar')) return;
+      if (sup.querySelector('a')) return;
+      const numStr = (sup.textContent || '').trim();
+      if (!/^\d{1,2}$/.test(numStr)) return;
+      if (footnoteNums.size > 0 && !footnoteNums.has(numStr)) return;
+
+      if (!assignedFootnoteRefs.has(numStr)) {
+        sup.id = `footnote-ref-${numStr}`;
+        assignedFootnoteRefs.add(numStr);
+      }
+      sup.innerHTML = `<a href="#footnote-${numStr}" class="footnote-link" title="Nhấn để nhảy tới Chú thích ${numStr}">${numStr}</a>`;
+    });
+
+    // 4. Linkify Unicode superscript digits (¹²³) and bracketed citations ([36], [1, 67], [30–32], [31, tr. 138]) in prose text nodes
+    const unicodeSupMap = { '¹': '1', '²': '2', '³': '3', '⁴': '4', '⁵': '5', '⁶': '6', '⁷': '7', '⁸': '8', '⁹': '9' };
+    const citationBracketRe = /\[(\d{1,3}(?:\s*(?:[-–,]\s*\d{1,3}|,\s*(?:tr|p|pp)\.?\s*\d+(?:[-–]\d+)?))*)\]/g;
+    const assignedCiteRefs = new Set();
+
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+    const candidateTextNodes = [];
+    let node;
+    while ((node = walker.nextNode())) {
+      const parent = node.parentElement;
+      if (!parent) continue;
+      if (parent.closest('a, .references-section, .page-footnotes, .authors-block, .source-page-toolbar, .figure-action-bar, .term-explain, script, style, .katex')) {
+        continue;
+      }
+      const val = node.nodeValue || '';
+      if (/\[\d|[¹²³⁴⁵⁶⁷⁸⁹]/.test(val)) {
+        candidateTextNodes.push(node);
+      }
+    }
+
+    const escapeHtml = str => String(str).replace(/[&<>"']/g, ch => ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;'
+    }[ch]));
+
+    candidateTextNodes.forEach(textNode => {
+      const raw = textNode.nodeValue || '';
+      let changed = false;
+
+      // Replace bracketed citations first on escaped text
+      let html = escapeHtml(raw).replace(citationBracketRe, (fullMatch, inner) => {
+        changed = true;
+        // Replace each reference number inside [...] except page numbers after "tr.", "p.", "pp."
+        const linkedInner = inner.replace(
+          /((?:tr|p|pp)\.?\s*\d+(?:[-–]\d+)?)|(\b\d{1,3}\b)/gi,
+          (m, pagePart, refNum) => {
+            if (pagePart) return pagePart;
+            const n = parseInt(refNum, 10);
+            if (!Number.isInteger(n) || n < 1 || n > 400) return m;
+            let idAttr = '';
+            if (!assignedCiteRefs.has(refNum)) {
+              assignedCiteRefs.add(refNum);
+              idAttr = ` id="cite-ref-${refNum}"`;
+            }
+            return `<a href="#ref-${refNum}"${idAttr} class="citation-link" data-ref="${refNum}" title="Nhấn để nhảy tới Tài liệu tham khảo [${refNum}]">${refNum}</a>`;
+          }
+        );
+        return `[${linkedInner}]`;
+      });
+
+      // Replace Unicode superscript footnote markers ¹²³
+      if (/[¹²³⁴⁵⁶⁷⁸⁹]/.test(html)) {
+        html = html.replace(/([¹²³⁴⁵⁶⁷⁸⁹])/g, (m, supChar) => {
+          const numStr = unicodeSupMap[supChar];
+          if (!numStr || (footnoteNums.size > 0 && !footnoteNums.has(numStr))) return m;
+          changed = true;
+          let idAttr = '';
+          if (!assignedFootnoteRefs.has(numStr)) {
+            assignedFootnoteRefs.add(numStr);
+            idAttr = ` id="footnote-ref-${numStr}"`;
+          }
+          return `<sup${idAttr}><a href="#footnote-${numStr}" class="footnote-link" title="Nhấn để nhảy tới Chú thích ${numStr}">${numStr}</a></sup>`;
+        });
+      }
+
+      if (changed) {
+        const tpl = document.createElement('template');
+        tpl.innerHTML = html;
+        textNode.replaceWith(tpl.content);
+      }
+    });
+
+    // 5. Make [N] in .reference-number clickable back-links to #cite-ref-N so PDF & HTML readers can jump back to the body text
+    [...root.querySelectorAll('.reference-entry')].forEach(entry => {
+      const refNum = entry.dataset.refNum;
+      const numEl = entry.querySelector('.reference-number');
+      if (!refNum || !numEl || numEl.querySelector('a')) return;
+      if (assignedCiteRefs.has(refNum)) {
+        numEl.innerHTML = `<a href="#cite-ref-${refNum}" class="reference-number-link" title="Nhấn để quay lại vị trí trích dẫn [${refNum}] trong bài">[${refNum}]</a>`;
+      }
+    });
   }
 
   formatReferencesForSafeColumns(html) {
@@ -3226,6 +3772,8 @@ class LayoutTransApp {
         entries.forEach(({ value, item }) => {
           const entry = document.createElement('div');
           entry.className = 'reference-entry';
+          entry.id = `ref-${value}`;
+          entry.dataset.refNum = String(value);
           const number = document.createElement('span');
           number.className = 'reference-number';
           number.textContent = `[${value}]`;
@@ -3603,7 +4151,7 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
       'THEAD', 'TBODY', 'TR', 'TH', 'TD', 'DIV', 'SPAN', 'FIGURE',
       'FIGCAPTION', 'SUP', 'SUB', 'BLOCKQUOTE', 'BR', 'A'
     ]);
-    const allowedAttributes = new Set(['class', 'data-page', 'data-source-page', 'data-bbox', 'data-rotate', 'data-fignum', 'data-source-label', 'colspan', 'rowspan', 'href', 'start', 'value']);
+    const allowedAttributes = new Set(['class', 'id', 'title', 'data-page', 'data-source-page', 'data-bbox', 'data-rotate', 'data-fignum', 'data-source-label', 'data-ref', 'data-ref-num', 'colspan', 'rowspan', 'href', 'start', 'value']);
     const allowedClasses = new Set([
       'source-page', 'layout-2col', 'book-columns-2', 'authors-block', 'author-row', 'author-name',
       'author-affil', 'abstract-box', 'abstract-title', 'callout', 'callout-note', 'callout-tip', 'callout-warning', 'callout-definition',
@@ -3613,7 +4161,11 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
       'figure-translation-box', 'figure-translation-header', 'figure-translation-table',
       'fig-comp-cell', 'fig-src-cell', 'fig-vi-cell',
       'translated-diagram', 'diagram-section', 'diagram-title', 'diagram-flow', 'diagram-box', 'diagram-arrow',
-      'table-scroll', 'page-footnotes', 'references-section', 'references-list', 'reference-item'
+      'table-scroll', 'page-footnotes', 'consolidated-footnotes', 'footnotes-title', 'footnote-item',
+      'footnote-link', 'footnote-backref', 'citation-link', 'reference-number-link',
+      'term-vi', 'term-en', 'term-explain', 'term-gloss',
+      'references-section', 'references-continuation', 'references-list', 'reference-item',
+      'reference-entries', 'reference-entry', 'reference-number', 'reference-text'
     ]);
 
     [...template.content.querySelectorAll('*')].forEach(element => {
@@ -3650,9 +4202,15 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
 
       if (element.tagName === 'A') {
         const href = element.getAttribute('href') || '';
-        if (!/^(https?:|mailto:)/i.test(href)) element.removeAttribute('href');
-        element.setAttribute('rel', 'noopener noreferrer');
-        element.setAttribute('target', '_blank');
+        if (/^#[a-zA-Z0-9_-]+$/.test(href)) {
+          element.removeAttribute('target');
+          element.removeAttribute('rel');
+        } else if (/^(https?:|mailto:)/i.test(href)) {
+          element.setAttribute('rel', 'noopener noreferrer');
+          element.setAttribute('target', '_blank');
+        } else {
+          element.removeAttribute('href');
+        }
       }
 
       if (element.tagName === 'SECTION') {
@@ -3819,7 +4377,7 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
   }
 
   extractIntegrityTokens(text) {
-    const matches = String(text || '').match(/\b(?:19|20)\d{2}\b|\b\d+(?:\.\d+){1,3}\b|10\.\d{4,9}\/[-._;()/:A-Z0-9]+|\[\d+(?:\s*[-,]\s*\d+)*\]/gi) || [];
+    const matches = String(text || '').match(/\b(?:19|20)\d{2}\b|\b\d+(?:\.\d+){1,3}\b|10\.\d{4,9}\/[-._;()/:A-Z0-9]+|\[\d+(?:\s*[-–,]\s*\d+)*(?:\s*,\s*(?:tr\.|p\.|pp\.)\s*\d+(?:\s*[-–]\s*\d+)?)?\]/gi) || [];
     return [...new Set(matches.map(token => token.toLowerCase()))];
   }
 
@@ -5343,25 +5901,25 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
     const exportFontSize = this.fontSize || 16;
 
     // Assemble all chunks with embedded high-DPI cropped author figures
-    let allContent = '';
+    const fullExportContainer = document.createElement('div');
     this.chunks.forEach(c => {
       if (c.status === 'completed') {
         const chunkBlock = document.getElementById(`chunk-block-${c.id}`);
-        let htmlToExport = chunkBlock
+        const htmlToExport = chunkBlock
           ? chunkBlock.querySelector('.chunk-inner-content').innerHTML
           : c.translatedHtml;
 
-        const cleanContainer = document.createElement('div');
-        cleanContainer.innerHTML = htmlToExport;
-        cleanContainer.querySelectorAll('.source-page-toolbar, .figure-action-bar, .chunk-retry-btn').forEach(el => el.remove());
-        htmlToExport = cleanContainer.innerHTML;
-
-        allContent += `
-        <section class="book-section" id="page-section-${c.startPage}">
-          ${htmlToExport}
-        </section>`;
+        const sectionEl = document.createElement('section');
+        sectionEl.className = 'book-section';
+        sectionEl.id = `page-section-${c.startPage}`;
+        sectionEl.innerHTML = htmlToExport;
+        sectionEl.querySelectorAll('.source-page-toolbar, .figure-action-bar, .chunk-retry-btn').forEach(el => el.remove());
+        fullExportContainer.appendChild(sectionEl);
       }
     });
+
+    this.cleanAndStitchProseInContainer(fullExportContainer);
+    const allContent = fullExportContainer.innerHTML;
 
     const fullHtml = `<!DOCTYPE html>
 <html lang="vi">
@@ -5374,6 +5932,7 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js" onload="renderMathInElement(document.body);"></script>
   <style>
+    html { scroll-behavior: smooth; }
     body {
       font-family: ${bodyCss};
       max-width: 940px;
@@ -5412,6 +5971,54 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
     h2 { font-size: ${this.h2Size}px; line-height: 1.3; color: #0f172a; margin: 1.5rem 0 0.8rem; border-bottom: 2px solid #e2e8f0; padding-bottom: 0.4rem; }
     h3 { font-size: ${this.h3Size}px; line-height: 1.35; color: #0f172a; margin: 1.2rem 0 0.6rem; }
     p { margin-bottom: 1.2rem; text-align: justify; }
+    .term-vi { font-weight: 700; color: #0f172a; }
+    .term-gloss { color: #64748b; }
+    .term-en { font-weight: 700; color: #64748b; }
+    .term-explain { font-style: italic; font-weight: 400; color: #64748b; }
+    .citation-link, .footnote-link, .footnote-backref, .reference-number-link {
+      color: #4f46e5;
+      text-decoration: none;
+      font-weight: 600;
+      cursor: pointer;
+      border-radius: 3px;
+      padding: 0 2px;
+      transition: background-color 0.15s ease, color 0.15s ease;
+    }
+    .citation-link:hover, .footnote-link:hover, .footnote-backref:hover, .reference-number-link:hover {
+      background: rgba(79, 70, 229, 0.12);
+      color: #3730a3;
+      text-decoration: underline;
+    }
+    .footnote-backref { margin-left: 4px; font-size: 0.9em; }
+    @keyframes targetPulse {
+      0% { background-color: rgba(99, 102, 241, 0.28); box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.18); }
+      100% { background-color: transparent; box-shadow: 0 0 0 0 rgba(99, 102, 241, 0); }
+    }
+    .target-highlight-pulse, :target {
+      animation: targetPulse 2.2s ease-out;
+      border-radius: 4px;
+      scroll-margin-top: 72px;
+    }
+    .citation-return-pill {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      z-index: 9999;
+      background: #4f46e5;
+      color: #ffffff;
+      border: none;
+      border-radius: 999px;
+      padding: 10px 18px;
+      font-family: ${headingCss};
+      font-size: 13px;
+      font-weight: 600;
+      box-shadow: 0 10px 25px rgba(79, 70, 229, 0.35);
+      cursor: pointer;
+      display: none;
+      align-items: center;
+      gap: 6px;
+    }
+    .citation-return-pill:hover { background: #4338ca; }
     .authors-block { width: 100%; margin: 1rem 0 1.5rem; padding: 0.65rem 0; border-top: 1px solid #f1f5f9; border-bottom: 1px solid #f1f5f9; display: flex; flex-direction: column; gap: 0.45rem; }
     .author-row { display: flex; flex-wrap: wrap; justify-content: flex-start; align-items: baseline; column-gap: 1.25rem; row-gap: 0.25rem; padding: 3px 0; font-size: ${Math.max(12, Math.round(exportFontSize * 0.88))}px; }
     .author-name { font-weight: 700; color: #0f172a; white-space: nowrap; flex-shrink: 0; }
@@ -5421,6 +6028,9 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
     .layout-2col, .book-columns-2 { display: block; width: 100%; margin: 0.85rem 0; }
     .page-footnotes { margin-top: 1.1rem; padding-top: 0.5rem; border-top: 1px solid #cbd5e1; font-size: ${Math.max(11, Math.round(exportFontSize * 0.82))}px; line-height: 1.45; color: #475569; }
     .page-footnotes p { font-size: ${Math.max(11, Math.round(exportFontSize * 0.82))}px; line-height: 1.45; margin-bottom: 0.35rem; color: #475569; }
+    .consolidated-footnotes { margin: 1.6rem 0 1.2rem; padding: 0.9rem 1.15rem; background: #f8fafc; border-top: 2px solid #cbd5e1; border-bottom: 1px solid #cbd5e1; border-radius: 6px; }
+    .footnotes-title { font-family: ${headingCss}; font-size: ${Math.max(13, Math.round(exportFontSize * 0.92))}px; font-weight: 700; color: #1e293b; margin: 0 0 0.55rem 0; }
+    .references-continuation h2, .references-continuation h3 { display: none; }
     @media (max-width: 768px) { .reference-entries { column-count: 1; } .author-row { flex-direction: column; gap: 0.2rem; } }
     .callout { background: #f8fafc; border-left: 4px solid #6366f1; padding: 1.2rem; border-radius: 8px; margin: 1.5rem 0; }
     .callout-title { font-weight: 700; margin-bottom: 0.5rem; color: #4338ca; }
@@ -5465,6 +6075,12 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
       h1 { font-size: ${+(this.h1Size * 0.72).toFixed(2)}pt; }
       h2 { font-size: ${+(this.h2Size * 0.72).toFixed(2)}pt; }
       h3 { font-size: ${+(this.h3Size * 0.72).toFixed(2)}pt; }
+      .term-vi { font-weight: 700; color: #111; }
+      .term-gloss { color: #52525b; }
+      .term-en { font-weight: 700; color: #52525b; }
+      .term-explain { font-style: italic; font-weight: 400; color: #52525b; }
+      .citation-link, .footnote-link, .footnote-backref, .reference-number-link { color: #1d4ed8; text-decoration: none; }
+      .citation-return-pill { display: none !important; }
       .layout-2col, .book-columns-2 { display: block; width: 100%; margin: 0.35rem 0; }
       .table-scroll { overflow: visible; margin: 0.45rem 0; }
       .table-scroll table, table, th, td, .figure-translation-table, .figure-translation-table th, .figure-translation-table td { width: 100%; min-width: 0; font-size: ${+(exportFontSize * 0.72 * 0.82).toFixed(2)}pt; line-height: 1.32; }
@@ -5475,6 +6091,9 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
       table { break-inside: auto; }
       tr { break-inside: avoid; }
       .page-footnotes, .page-footnotes p { font-size: ${+(exportFontSize * 0.72 * 0.78).toFixed(2)}pt; line-height: 1.3; }
+      .consolidated-footnotes { margin: 0.55rem 0; padding: 0.45rem 0.65rem; background: #f8fafc; border-top: 1pt solid #94a3b8; border-bottom: 0.5pt solid #cbd5e1; }
+      .footnotes-title { font-size: ${+(exportFontSize * 0.72 * 0.9).toFixed(2)}pt; margin: 0 0 0.25rem 0; }
+      .references-continuation h2, .references-continuation h3 { display: none !important; }
       .references-section { margin: 0.25rem 0 0; padding-top: 0; border-top: 0; break-inside: auto; page-break-inside: auto; }
       .references-section h2, .references-section h3 { margin: 0.35rem 0 0.3rem; font-size: ${+(this.h3Size * 0.72).toFixed(2)}pt; }
       .references-section, .references-list, .references-list li, .reference-entries, .reference-entry { font-size: ${+(exportFontSize * 0.72 * 0.78).toFixed(2)}pt; line-height: 1.26; }
@@ -5485,6 +6104,44 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
 </head>
 <body>
   ${allContent}
+  <button type="button" id="citationReturnPill" class="citation-return-pill">↩ Quay lại vị trí đọc</button>
+  <script>
+    (function() {
+      var returnPill = document.getElementById('citationReturnPill');
+      var lastReturnEl = null;
+      function pulseTarget(el) {
+        if (!el) return;
+        el.classList.remove('target-highlight-pulse');
+        void el.offsetWidth;
+        el.classList.add('target-highlight-pulse');
+        setTimeout(function() { el.classList.remove('target-highlight-pulse'); }, 2400);
+      }
+      document.addEventListener('click', function(e) {
+        var link = e.target.closest('a[href^="#"]');
+        if (!link) return;
+        var hash = link.getAttribute('href');
+        if (!hash || hash.length < 2) return;
+        var target = document.getElementById(hash.slice(1));
+        if (!target) return;
+        e.preventDefault();
+        if (link.classList.contains('citation-link') || link.classList.contains('footnote-link')) {
+          lastReturnEl = link;
+          if (returnPill) returnPill.style.display = 'inline-flex';
+        }
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        pulseTarget(target);
+      });
+      if (returnPill) {
+        returnPill.addEventListener('click', function() {
+          if (lastReturnEl) {
+            lastReturnEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            pulseTarget(lastReturnEl);
+          }
+          returnPill.style.display = 'none';
+        });
+      }
+    })();
+  </script>
 </body>
 </html>`;
 

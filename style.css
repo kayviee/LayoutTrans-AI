@@ -1534,7 +1534,7 @@ body {
   margin-top: 0;
 }
 
-/* Page Footnotes Container */
+/* Page Footnotes & Consolidated Footnotes Container */
 .page-footnotes,
 .translated-book-document .page-footnotes {
   margin-top: 1.15rem;
@@ -1552,6 +1552,133 @@ body {
   margin-bottom: 0.35rem !important;
   color: var(--text-secondary) !important;
   text-align: justify;
+}
+
+.consolidated-footnotes,
+.translated-book-document .consolidated-footnotes {
+  margin: 1.75rem 0 1.25rem;
+  padding: 0.95rem 1.2rem;
+  background: color-mix(in srgb, var(--bg-secondary) 85%, transparent);
+  border-top: 2px solid var(--border-color);
+  border-bottom: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+}
+
+.footnotes-title,
+.translated-book-document .footnotes-title {
+  font-family: var(--heading-font-family, Inter, sans-serif) !important;
+  font-size: calc(var(--reader-font-size, 16px) * 0.92) !important;
+  font-weight: 700 !important;
+  color: var(--text-heading) !important;
+  margin: 0 0 0.55rem 0 !important;
+}
+
+.references-continuation h2,
+.references-continuation h3 {
+  display: none !important;
+}
+
+/* Bilingual Key Term & Beginner Explanation Styling */
+.translated-book-document .term-vi,
+.term-vi {
+  font-weight: 700;
+  color: var(--text-heading);
+}
+
+.translated-book-document .term-gloss,
+.term-gloss {
+  color: var(--text-secondary);
+}
+
+.translated-book-document .term-en,
+.term-en {
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
+.translated-book-document .term-explain,
+.term-explain {
+  font-style: italic;
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+
+/* Interactive Citation & Footnote Links */
+.translated-book-document .citation-link,
+.translated-book-document .footnote-link,
+.translated-book-document .footnote-backref,
+.translated-book-document .reference-number-link,
+.citation-link,
+.footnote-link,
+.footnote-backref,
+.reference-number-link {
+  color: var(--accent-primary);
+  text-decoration: none;
+  font-weight: 600;
+  cursor: pointer;
+  border-radius: 3px;
+  padding: 0 2px;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.translated-book-document .citation-link:hover,
+.translated-book-document .footnote-link:hover,
+.translated-book-document .footnote-backref:hover,
+.translated-book-document .reference-number-link:hover,
+.citation-link:hover,
+.footnote-link:hover,
+.footnote-backref:hover,
+.reference-number-link:hover {
+  background: rgba(99, 102, 241, 0.15);
+  text-decoration: underline;
+}
+
+.footnote-backref {
+  margin-left: 4px;
+  font-size: 0.9em;
+}
+
+@keyframes targetHighlightPulse {
+  0% {
+    background-color: rgba(99, 102, 241, 0.28);
+    box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.18);
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: 0 0 0 0 rgba(99, 102, 241, 0);
+  }
+}
+
+.target-highlight-pulse {
+  animation: targetHighlightPulse 2.2s ease-out;
+  border-radius: 4px;
+  scroll-margin-top: 84px;
+}
+
+.citation-return-pill {
+  position: fixed;
+  bottom: 24px;
+  right: 28px;
+  z-index: 9500;
+  background: var(--accent-primary);
+  color: #ffffff;
+  border: none;
+  border-radius: 999px;
+  padding: 9px 16px;
+  font-family: var(--font-sans);
+  font-size: 0.8rem;
+  font-weight: 600;
+  box-shadow: 0 8px 22px rgba(99, 102, 241, 0.38);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: transform 0.15s ease, background-color 0.15s ease;
+}
+
+.citation-return-pill:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.08);
 }
 
 /* Callout / Note / Highlight Boxes */
@@ -3102,8 +3229,8 @@ textarea:focus {
     font-size: var(--print-ref-size, 8.4pt) !important;
     line-height: 1.32 !important;
     color: #334155 !important;
-    page-break-inside: avoid !important;
-    break-inside: avoid !important;
+    page-break-inside: auto !important;
+    break-inside: auto !important;
   }
 
   .page-footnotes p,
@@ -3112,6 +3239,65 @@ textarea:focus {
     line-height: 1.32 !important;
     margin-bottom: 2.5pt !important;
     color: #334155 !important;
+  }
+
+  .consolidated-footnotes,
+  .translated-book-document .consolidated-footnotes {
+    margin: 0.65rem 0 0.45rem !important;
+    padding: 0.45rem 0.65rem !important;
+    background: #f8fafc !important;
+    border-top: 1pt solid #94a3b8 !important;
+    border-bottom: 0.5pt solid #cbd5e1 !important;
+  }
+
+  .footnotes-title,
+  .translated-book-document .footnotes-title {
+    font-size: calc(var(--print-body-size, 11.2pt) * 0.88) !important;
+    font-weight: 700 !important;
+    color: #0f172a !important;
+    margin: 0 0 0.25rem 0 !important;
+  }
+
+  .references-continuation h2,
+  .references-continuation h3,
+  .citation-return-pill {
+    display: none !important;
+  }
+
+  .translated-book-document .term-vi,
+  .term-vi {
+    font-weight: 700 !important;
+    color: #111111 !important;
+  }
+
+  .translated-book-document .term-gloss,
+  .term-gloss {
+    color: #52525b !important;
+  }
+
+  .translated-book-document .term-en,
+  .term-en {
+    font-weight: 700 !important;
+    color: #52525b !important;
+  }
+
+  .translated-book-document .term-explain,
+  .term-explain {
+    font-style: italic !important;
+    font-weight: 400 !important;
+    color: #52525b !important;
+  }
+
+  .translated-book-document .citation-link,
+  .translated-book-document .footnote-link,
+  .translated-book-document .footnote-backref,
+  .translated-book-document .reference-number-link,
+  .citation-link,
+  .footnote-link,
+  .footnote-backref,
+  .reference-number-link {
+    color: #1d4ed8 !important;
+    text-decoration: none !important;
   }
 
   /* Academic Figures & Translated Diagrams */
