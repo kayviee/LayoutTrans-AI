@@ -1420,18 +1420,22 @@ class LayoutTransApp {
       if (shouldExtractProfiles) {
         const textContent = await page.getTextContent();
         const analysisViewport = page.getViewport({ scale: 1 });
-        const text = textContent.items
+        const sourceStyle = this.analyzeSourcePage(textContent, analysisViewport.width);
+        const textItems = this.extractSourceTextItems(textContent, analysisViewport);
+        const geoText = this.buildGeometricReadingOrderText(textItems, sourceStyle.columnCount);
+        const text = geoText.fullText || textContent.items
           .map(item => typeof item.str === 'string' ? item.str : '')
           .join(' ')
           .replace(/\s+/g, ' ')
           .trim();
-        const sourceStyle = this.analyzeSourcePage(textContent, analysisViewport.width);
         this.sourcePageProfiles.push({
           pageNum,
           text,
+          leftColText: geoText.leftColText || '',
+          rightColText: geoText.rightColText || '',
           characterCount: text.length,
           wordCount: text ? text.split(/\s+/).length : 0,
-          textItems: this.extractSourceTextItems(textContent, analysisViewport),
+          textItems,
           ...sourceStyle
         });
       }
@@ -1584,6 +1588,50 @@ class LayoutTransApp {
         };
       })
       .filter(Boolean);
+  }
+
+  buildGeometricReadingOrderText(textItems, columnCount = 1) {
+    if (!Array.isArray(textItems) || textItems.length === 0) {
+      return { fullText: '', leftColText: '', rightColText: '' };
+    }
+    const sortGroup = group => [...group].sort((a, b) => {
+      const ay = (a.bbox[0] + a.bbox[2]) / 2;
+      const by = (b.bbox[0] + b.bbox[2]) / 2;
+      if (Math.abs(ay - by) > 4.5) return ay - by;
+      return a.bbox[1] - b.bbox[1];
+    });
+    const joinGroup = group => sortGroup(group)
+      .map(item => String(item.text || '').trim())
+      .filter(Boolean)
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    if (columnCount === 2) {
+      const topSpanning = [];
+      const leftCol = [];
+      const rightCol = [];
+      textItems.forEach(item => {
+        if (item.rotation === 90 || item.rotation === 270) return;
+        const [, x0, y1, x1] = item.bbox || [0, 0, 0, 0];
+        const cx = (x0 + x1) / 2;
+        if ((x0 < 380 && x1 > 620) || (y1 < 220 && (x1 - x0) > 480)) {
+          topSpanning.push(item);
+        } else if (cx < 500) {
+          leftCol.push(item);
+        } else {
+          rightCol.push(item);
+        }
+      });
+      const topText = joinGroup(topSpanning);
+      const leftColText = joinGroup(leftCol);
+      const rightColText = joinGroup(rightCol);
+      const fullText = [topText, leftColText, rightColText].filter(Boolean).join(' ').trim();
+      return { fullText, leftColText, rightColText };
+    }
+
+    const fullText = joinGroup(textItems);
+    return { fullText, leftColText: '', rightColText: '' };
   }
 
   resolveFigureCropAndRotation(pageNum, rawBbox, explicitRotate = 0) {
@@ -2467,6 +2515,9 @@ class LayoutTransApp {
       `;
 
       this.bindChunkInteractiveActions(chunkBlock, chunk);
+      if (this.translatedContent) {
+        this.cleanAndStitchProseInContainer(this.translatedContent);
+      }
 
       if (window.renderMathInElement) {
         renderMathInElement(chunkBlock, {
@@ -2711,7 +2762,7 @@ class LayoutTransApp {
     template.innerHTML = html;
     const root = template.content;
 
-    // 1. Hoist full-width header elements (h1, authors-block, abstract-box, paper-cover-institution) out of .layout-2col
+    // 1. Hoist full-width header elements (h1, authors-block, abstract-box, paper-cover-institution, paper-journal-meta) out of .layout-2col
     [...root.querySelectorAll('.layout-2col, .book-columns-2')].forEach(grid => {
       const toHoist = [...grid.querySelectorAll('h1, .authors-block, .abstract-box, .paper-cover-institution, .paper-journal-meta')];
       toHoist.forEach(el => {
@@ -2719,15 +2770,15 @@ class LayoutTransApp {
       });
     });
 
-    // 2. Demote top journal / category kicker (e.g. "npj | Y học kỹ thuật số (Digital Medicine) - Bình luận") into subtle .paper-journal-meta
+    // 2. Demote top journal / category kicker into subtle .paper-journal-meta
     const h1 = root.querySelector('h1');
-    const journalKickerRegex = /\bnpj\b|digital medicine|y học kỹ thuật số|\bperspective\b|bình luận|nhận định|chuyên đề|nature|springer|elsevier|original article|review article|commentary/i;
+    const journalKickerRegex = /\bnpj\b|digital medicine|y học kỹ thuật số|\bperspective\b|bình luận|nhận định|chuyên đề|nature|springer|elsevier|original article|review article|commentary|ai and ethics|doi\.org|\bdoi\s*:/i;
     if (h1) {
       let prev = h1.previousElementSibling;
       while (prev) {
         const prevSibling = prev.previousElementSibling;
         const txt = (prev.textContent || '').replace(/\s+/g, ' ').trim();
-        if (txt && txt.length < 180 && !prev.matches('figure, table, .table-scroll, .source-page-toolbar')) {
+        if (txt && txt.length < 240 && !prev.matches('figure, table, .table-scroll, .source-page-toolbar')) {
           const metaDiv = document.createElement('div');
           metaDiv.className = 'paper-journal-meta';
           metaDiv.textContent = txt;
@@ -2739,7 +2790,7 @@ class LayoutTransApp {
       const firstEl = root.firstElementChild;
       if (firstEl && /^(H2|H3|P|DIV)$/.test(firstEl.tagName)) {
         const txt = (firstEl.textContent || '').replace(/\s+/g, ' ').trim();
-        if (txt.length > 0 && txt.length < 160 && journalKickerRegex.test(txt)) {
+        if (txt.length > 0 && txt.length < 240 && journalKickerRegex.test(txt)) {
           const metaDiv = document.createElement('div');
           metaDiv.className = 'paper-journal-meta';
           metaDiv.textContent = txt;
@@ -2747,6 +2798,9 @@ class LayoutTransApp {
         }
       }
     }
+
+    // Format DOI onto its own line in .paper-journal-meta / .paper-cover-institution
+    this.formatPaperJournalMetaDoi(root);
 
     // 3. Clean up .authors-block so author names never wrap awkwardly mid-name
     [...root.querySelectorAll('.authors-block')].forEach(block => {
@@ -2756,37 +2810,87 @@ class LayoutTransApp {
       });
     });
 
-    // 4. Relocate any <figure class="paper-figure"> or standalone .table-scroll that interrupts prose mid-page
-    //    (Fixes Issue 7 where Table 1 / Figure split two sentences of "Concrete oversight safeguards" in half!)
-    [...root.querySelectorAll('.layout-2col figure, .book-columns-2 figure')].forEach(fig => {
-      const grid = fig.closest('.layout-2col, .book-columns-2');
-      if (grid && grid.parentNode) {
-        grid.parentNode.insertBefore(fig, grid.nextSibling);
+    // 4. Fix inverted [RightCol, LeftCol] inside .layout-2col (caused by PDF streams where RightCol objects precede LeftCol)
+    //    and unwrap .layout-2col into sequential full-width reading order so columns never jump across pages or leave half-page gaps
+    [...root.querySelectorAll('.layout-2col, .book-columns-2')].forEach(grid => {
+      [...grid.querySelectorAll('figure')].forEach(fig => {
+        if (grid.parentNode) {
+          grid.parentNode.insertBefore(fig, grid.nextSibling);
+        }
+      });
+
+      const cols = [...grid.children].filter(c => c.tagName === 'DIV');
+      if (cols.length === 2 && this.areColumnsInverted(cols[0], cols[1], pageNum)) {
+        grid.insertBefore(cols[1], cols[0]);
       }
+
+      const orderedNodes = [];
+      [...grid.children].forEach(child => {
+        if (child.tagName === 'DIV' && !child.classList.length) {
+          orderedNodes.push(...child.childNodes);
+        } else {
+          orderedNodes.push(child);
+        }
+      });
+      grid.replaceWith(...orderedNodes);
     });
 
+    // 5. Deduplicate any hallucinated <figure> that merely repeats an existing full HTML <table> on the same page
+    //    (e.g. Source Page 10 where Table 1 was rendered both as a full HTML <table> and as "Hình 1: Bảng 1" figure)
+    const standaloneTables = [...root.querySelectorAll('.table-scroll > table:not(.figure-translation-table)')]
+      .filter(t => t.querySelectorAll('tr').length >= 4);
+    if (standaloneTables.length > 0) {
+      [...root.querySelectorAll('figure.paper-figure, figure.figure-wrapper')].forEach(fig => {
+        const rot = parseInt(fig.getAttribute('data-rotate') || '0', 10) || 0;
+        if (rot === 90 || rot === 270) return;
+        const capText = (fig.querySelector('figcaption')?.textContent || '').replace(/\s+/g, ' ').trim();
+        if (/\b(?:bảng|table)\s*1\b/i.test(capText) || /^(?:hình\s*\d+\s*:\s*)?(?:bảng|table)\s*\d+/i.test(capText)) {
+          fig.remove();
+        }
+      });
+    }
+
+    // 6. Relocate any <figure> or standalone .table-scroll ONLY when it interrupts prose mid-section
+    //    Never move a table/figure that is already at the top of the page (no prose before it),
+    //    and never move it past a subsequent <h2> major section heading!
     const topLevelFiguresAndTables = [...root.children].filter(el => (
       el.matches('figure.paper-figure, figure.figure-wrapper')
       || (el.matches('.table-scroll') && !el.closest('figure'))
     ));
     if (topLevelFiguresAndTables.length > 0) {
-      const refSection = [...root.children].find(el => el.matches('.references-section'));
       topLevelFiguresAndTables.forEach(mediaEl => {
-        // Check if there is prose AFTER this figure/table on the same page
-        let next = mediaEl.nextElementSibling;
-        let hasProseAfter = false;
-        while (next) {
-          if (!next.matches('.references-section, figure, .table-scroll, .source-page-toolbar')) {
-            if ((next.textContent || '').trim().length > 20) {
-              hasProseAfter = true;
+        let prev = mediaEl.previousElementSibling;
+        let hasProseBefore = false;
+        while (prev) {
+          if (!prev.matches('.paper-journal-meta, .paper-cover-institution, h1, .authors-block, .abstract-box, figure, .table-scroll, .source-page-toolbar')) {
+            if ((prev.textContent || '').trim().length > 20) {
+              hasProseBefore = true;
               break;
+            }
+          }
+          prev = prev.previousElementSibling;
+        }
+        if (!hasProseBefore) return;
+
+        let next = mediaEl.nextElementSibling;
+        let hasProseAfterBeforeH2 = false;
+        let boundaryEl = null;
+        while (next) {
+          if (next.matches('h2, .references-section, .page-footnotes')) {
+            boundaryEl = next;
+            break;
+          }
+          if (!next.matches('figure, .table-scroll, .source-page-toolbar')) {
+            if ((next.textContent || '').trim().length > 20) {
+              hasProseAfterBeforeH2 = true;
             }
           }
           next = next.nextElementSibling;
         }
-        if (hasProseAfter) {
-          if (refSection) {
-            root.insertBefore(mediaEl, refSection);
+
+        if (hasProseAfterBeforeH2) {
+          if (boundaryEl) {
+            root.insertBefore(mediaEl, boundaryEl);
           } else {
             root.appendChild(mediaEl);
           }
@@ -2794,41 +2898,177 @@ class LayoutTransApp {
       });
     }
 
-    // Merge consecutive .layout-2col blocks that were separated only by a relocated figure
-    const directChildren = [...root.children];
-    for (let i = 0; i < directChildren.length - 1; i++) {
-      const curr = directChildren[i];
-      const next = curr.nextElementSibling;
-      if (curr && next && curr.matches('.layout-2col') && next.matches('.layout-2col')) {
-        const currCols = [...curr.children].filter(c => c.tagName === 'DIV');
-        const nextCols = [...next.children].filter(c => c.tagName === 'DIV');
-        if (currCols.length === 2 && nextCols.length === 2) {
-          // Append next's columns into curr's columns in reading order:
-          // Actually, curr's Col 2 end connects to next's Col 1 start!
-          [...nextCols[0].childNodes].forEach(n => currCols[1].appendChild(n));
-          [...nextCols[1].childNodes].forEach(n => currCols[1].appendChild(n));
-          next.remove();
+    // 7. Extract inline footnotes (e.g. "1 Đã bị Thống đốc...", "2 Các nhân vật...", "3 Mặc dù trên thực tế...")
+    //    into <div class="page-footnotes"> at the bottom of the page so they never split a sentence in half
+    this.extractPageFootnotesToBottom(root);
+
+    // 8. Strip artificial ellipses ("..." / "…") and stitch split sentences within the page
+    this.cleanAndStitchProseInContainer(root);
+
+    return template.innerHTML.trim();
+  }
+
+  formatPaperJournalMetaDoi(root) {
+    if (!root) return;
+    [...root.querySelectorAll('.paper-journal-meta, .paper-cover-institution')].forEach(metaEl => {
+      if (metaEl.querySelector('.paper-doi-line')) return;
+      const rawText = (metaEl.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!rawText) return;
+
+      const doiMatch = rawText.match(/(?:doi\s*:\s*)?(https?:\/\/(?:dx\.)?doi\.org\/[^\s|•,;]+|10\.\d{4,9}\/[^\s|•,;]+)/i);
+      if (!doiMatch) return;
+
+      const rawDoiToken = doiMatch[1].replace(/[.)]+$/, '');
+      const cleanDoiUrl = rawDoiToken.toLowerCase().startsWith('http')
+        ? rawDoiToken.toLowerCase()
+        : `https://doi.org/${rawDoiToken.toLowerCase()}`;
+
+      const beforeDoi = rawText.slice(0, doiMatch.index).replace(/[\s|•,-]+$/, '').trim();
+      const afterDoi = rawText.slice(doiMatch.index + doiMatch[0].length).replace(/^[\s|•,-]+/, '').trim();
+      const mainParts = [beforeDoi, afterDoi].filter(Boolean);
+      const mainTitle = mainParts.join(' • ');
+
+      metaEl.textContent = '';
+      if (mainTitle) {
+        const titleSpan = document.createElement('span');
+        titleSpan.className = 'paper-journal-title';
+        titleSpan.textContent = mainTitle;
+        metaEl.appendChild(titleSpan);
+      }
+      const doiLine = document.createElement('div');
+      doiLine.className = 'paper-doi-line';
+      doiLine.appendChild(document.createTextNode('DOI: '));
+      const doiLink = document.createElement('a');
+      doiLink.href = cleanDoiUrl;
+      doiLink.target = '_blank';
+      doiLink.rel = 'noopener noreferrer';
+      doiLink.textContent = cleanDoiUrl;
+      doiLine.appendChild(doiLink);
+      metaEl.appendChild(doiLine);
+    });
+  }
+
+  areColumnsInverted(colA, colB, pageNum = 1) {
+    if (!colA || !colB) return false;
+    const startsLowercaseRe = /^[a-zàáảãạăắằẳẵặâấầẩẫậđèéẻẽẹêếềểễệìíỉĩịòóỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵ]/;
+
+    const extractHeadingNums = col => [...col.querySelectorAll('h2, h3, h4')]
+      .map(h => {
+        const m = (h.textContent || '').trim().match(/^(\d+(?:\.\d+)*)\b/);
+        return m ? m[1].split('.').map(n => parseInt(n, 10)) : null;
+      })
+      .filter(Boolean);
+
+    const compareNumTuples = (a, b) => {
+      const len = Math.max(a.length, b.length);
+      for (let i = 0; i < len; i++) {
+        const av = a[i] ?? 0;
+        const bv = b[i] ?? 0;
+        if (av !== bv) return av - bv;
+      }
+      return 0;
+    };
+
+    const headingsA = extractHeadingNums(colA);
+    const headingsB = extractHeadingNums(colB);
+    if (headingsA.length > 0 && headingsB.length > 0) {
+      // If colA has a higher section number than colB (e.g. 3.4 in colA vs 3.3 in colB), columns are inverted
+      if (compareNumTuples(headingsA[0], headingsB[headingsB.length - 1]) > 0) {
+        return true;
+      }
+      if (compareNumTuples(headingsA[headingsA.length - 1], headingsB[0]) < 0) {
+        return false;
+      }
+    }
+
+    const parasA = [...colA.querySelectorAll('p, li')].map(p => (p.textContent || '').replace(/\s+/g, ' ').trim()).filter(Boolean);
+    const parasB = [...colB.querySelectorAll('p, li')].map(p => (p.textContent || '').replace(/\s+/g, ' ').trim()).filter(Boolean);
+    const firstA = parasA[0] || '';
+    const lastA = parasA[parasA.length - 1] || '';
+    const lastB = parasB[parasB.length - 1] || '';
+
+    // Signal 2: Numbered list / question inversion (e.g. colA starts with "2. " while colB ends with "1. ")
+    if (/^[2-9]\.\s/.test(firstA) && /^1\.\s/.test(lastB)) {
+      return true;
+    }
+
+    // Signal 3: Clause continuation across column boundary (colB ends with a comma "," and colA starts lowercase)
+    if (/,\s*$/.test(lastB) && startsLowercaseRe.test(firstA) && !/,\s*$/.test(lastA)) {
+      return true;
+    }
+
+    // Signal 4: Compare citation/year/section tokens against geometric leftColText & rightColText of source PDF page
+    const profile = this.getSourcePageProfile(pageNum);
+    if (profile?.leftColText && profile?.rightColText) {
+      const leftTokens = new Set(this.extractIntegrityTokens(profile.leftColText));
+      const rightTokens = new Set(this.extractIntegrityTokens(profile.rightColText));
+      if (leftTokens.size >= 2 && rightTokens.size >= 2) {
+        const tokensA = this.extractIntegrityTokens(colA.textContent || '');
+        const tokensB = this.extractIntegrityTokens(colB.textContent || '');
+        const countMatches = (arr, set) => arr.reduce((acc, t) => acc + (set.has(t) && !(leftTokens.has(t) && rightTokens.has(t)) ? 1 : 0), 0);
+        const normalScore = countMatches(tokensA, leftTokens) + countMatches(tokensB, rightTokens);
+        const invertedScore = countMatches(tokensA, rightTokens) + countMatches(tokensB, leftTokens);
+        if (invertedScore >= normalScore + 2) {
+          return true;
         }
       }
     }
 
-    // 5. Strip artificial ellipses ("..." / "…") and stitch split sentences within the page
-    this.cleanAndStitchProseInContainer(root);
+    return false;
+  }
 
-    return template.innerHTML.trim();
+  extractPageFootnotesToBottom(root) {
+    if (!root) return;
+    const footnoteParas = [];
+    const candidates = [...root.querySelectorAll('p')].filter(p => (
+      !p.closest('figcaption, table, .authors-block, .abstract-box, .references-section, .callout, .page-footnotes, .source-page-toolbar')
+    ));
+
+    candidates.forEach(p => {
+      const htmlTrim = (p.innerHTML || '').trim();
+      const textTrim = (p.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!textTrim || textTrim.length > 650) return;
+
+      const startsWithSupDigit = /^<sup\b[^>]*>\s*\d{1,2}\s*<\/sup>\s*\S/i.test(htmlTrim);
+      // Plain footnote: starts with single digit 1-9 followed by a space (NOT a dot ".") and an uppercase letter
+      const plainFootnoteMatch = textTrim.match(/^([1-9])\s+([A-ZÀÁẢÃẠĂẮẰẲẴẶÂẤẦẨẪẬĐÈÉẺẼẸÊẾỀỂỄỆÌÍỈĨỊÒÓỎÕỌÔỐỒỔỖỘƠỚỜỞỠỢÙÚỦŨỤƯỨỪỬỮỰỲÝỶỸỴ][\s\S]+)$/);
+
+      if (startsWithSupDigit) {
+        footnoteParas.push(p);
+      } else if (plainFootnoteMatch) {
+        const fnNum = plainFootnoteMatch[1];
+        p.innerHTML = p.innerHTML.trim().replace(/^[1-9]\s+/, `<sup>${fnNum}</sup> `);
+        footnoteParas.push(p);
+      }
+    });
+
+    if (footnoteParas.length === 0) return;
+
+    let fnContainer = root.querySelector('.page-footnotes');
+    if (!fnContainer) {
+      fnContainer = document.createElement('div');
+      fnContainer.className = 'page-footnotes';
+      const refSection = [...root.children].find(el => el.matches('.references-section'));
+      if (refSection) {
+        root.insertBefore(fnContainer, refSection);
+      } else {
+        root.appendChild(fnContainer);
+      }
+    }
+    footnoteParas.forEach(p => fnContainer.appendChild(p));
   }
 
   cleanAndStitchProseInContainer(root) {
     if (!root) return;
     const isProseParagraph = p => (
       p && p.tagName === 'P'
-      && !p.closest('figcaption, table, .authors-block, .references-section, .source-page-toolbar')
+      && !p.closest('figcaption, table, .authors-block, .references-section, .page-footnotes, .source-page-toolbar')
     );
 
     const paragraphs = [...root.querySelectorAll('p')].filter(isProseParagraph);
     const trailingEllipsisRe = /(?:\s*(?:\.\.\.|…|\.\s*\.\s*\.))+\s*$/;
     const leadingEllipsisRe = /^\s*(?:\.\.\.|…|\.\s*\.\s*\.)+\s*/;
-    const terminalPunctRe = /[.!?:"”)\]]\s*$/;
+    const terminalPunctRe = /[.!?:"”]\s*$|\)\.\s*$|\]\.\s*$/;
     const startsLowercaseRe = /^[a-zàáảãạăắằẳẵặâấầẩẫậđèéẻẽẹêếềểễệìíỉĩịòóỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵ]/;
 
     // First clean any inline "...<br>..." or stray <br> inside prose paragraphs
@@ -2844,6 +3084,8 @@ class LayoutTransApp {
         p.innerHTML = p.innerHTML.replace(/(?:\.\.\.|…)\s+(?:\.\.\.|…)/g, ' ');
       }
     });
+
+    const blockers = [...root.querySelectorAll('h1, h2, h3, h4, figure, .table-scroll, .references-section, ol, ul, blockquote')];
 
     for (let i = 0; i < paragraphs.length; i++) {
       const p = paragraphs[i];
@@ -2864,25 +3106,29 @@ class LayoutTransApp {
       const nextP = paragraphs[i + 1];
       if (!nextP || !nextP.isConnected) continue;
 
-      // Do not merge across an abstract box boundary
+      // Do not merge across an abstract box or callout boundary
       if (Boolean(p.closest('.abstract-box')) !== Boolean(nextP.closest('.abstract-box'))) continue;
       if (Boolean(p.closest('.callout')) !== Boolean(nextP.closest('.callout'))) continue;
 
-      // Do not merge if there is a heading (h1, h2, h3, h4) between p and nextP
-      const hasHeadingBetween = (() => {
+      // Do not merge if there is a heading (h1-h4), figure, table, list, or references section between p and nextP
+      const hasBlockerBetween = (() => {
         if (p.parentElement === nextP.parentElement) {
           let sib = p.nextElementSibling;
           while (sib && sib !== nextP) {
-            if (/^H[1-4]$/.test(sib.tagName)) return true;
+            if (sib.matches('h1, h2, h3, h4, figure, .table-scroll, .references-section, ol, ul, blockquote')) {
+              return true;
+            }
             sib = sib.nextElementSibling;
           }
           return false;
         }
-        const nextFirstPrev = nextP.previousElementSibling;
-        if (nextFirstPrev && /^H[1-4]$/.test(nextFirstPrev.tagName)) return true;
-        return false;
+        return blockers.some(el => (
+          el.isConnected
+          && (p.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING)
+          && (el.compareDocumentPosition(nextP) & Node.DOCUMENT_POSITION_FOLLOWING)
+        ));
       })();
-      if (hasHeadingBetween) continue;
+      if (hasBlockerBetween) continue;
 
       let nextText = (nextP.textContent || '').trim();
       const hadLeadingEllipsis = leadingEllipsisRe.test(nextText);
@@ -2901,10 +3147,29 @@ class LayoutTransApp {
         continue;
       }
 
+      const sameSourcePage = p.closest('section.source-page') === nextP.closest('section.source-page');
       const endsIncomplete = !terminalPunctRe.test(pText);
       const nextStartsLower = startsLowercaseRe.test(nextText);
+      const endsWithComma = /,\s*$/.test(pText);
+      const startsCommonWordAfterComma = /^(Các|Những|Một|Việc|Sự|Trong|Trên|Dưới|Để|Khi|Nếu|Mặc dù|Tuy nhiên|Do đó|Ngoài ra|Hơn nữa|Chẳng hạn|Ví dụ|Bằng|Theo|Với|Từ|Cho|Về)\s/.test(nextText);
 
-      if (hadTrailingEllipsis || hadLeadingEllipsis || (endsIncomplete && nextStartsLower) || nextStartsLower) {
+      // If p ends with a comma (e.g. "Ngược lại,") and nextP starts with a common word capitalized only because it was at the top of a column ("Các nhà phê bình...")
+      if (endsWithComma && startsCommonWordAfterComma) {
+        nextP.innerHTML = nextP.innerHTML.replace(
+          /^(\s*)([A-ZÀÁẢÃẠĂẮẰẲẴẶÂẤẦẨẪẬĐÈÉẺẼẸÊẾỀỂỄỆÌÍỈĨỊÒÓỎÕỌÔỐỒỔỖỘƠỚỜỞỠỢÙÚỦŨỤƯỨỪỬỮỰỲÝỶỸỴ])/,
+          (_, ws, ch) => ws + ch.toLowerCase()
+        );
+        p.innerHTML = `${p.innerHTML.trim()} ${nextP.innerHTML.trim()}`;
+        nextP.remove();
+        i -= 1;
+        continue;
+      }
+
+      const shouldMerge = sameSourcePage
+        ? (hadTrailingEllipsis || hadLeadingEllipsis || (endsIncomplete && nextStartsLower) || nextStartsLower)
+        : (hadTrailingEllipsis || hadLeadingEllipsis || (endsIncomplete && nextStartsLower));
+
+      if (shouldMerge) {
         if (!endsIncomplete && nextStartsLower && !hadTrailingEllipsis && !hadLeadingEllipsis) {
           // p ended with a period, and nextP started with a lowercase letter (e.g. split mid-paragraph by figure/column)
           // Capitalize first letter of nextP and merge into p so the paragraph stays whole
@@ -2954,6 +3219,8 @@ class LayoutTransApp {
       });
 
       if (entries.length > 0) {
+        // Sort references strictly by numerical value [1]..[N] so multi-column PDF streams never scramble reference numbers
+        entries.sort((a, b) => a.value - b.value);
         const entryContainer = document.createElement('div');
         entryContainer.className = 'reference-entries';
         entries.forEach(({ value, item }) => {
@@ -3340,13 +3607,13 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
     const allowedClasses = new Set([
       'source-page', 'layout-2col', 'book-columns-2', 'authors-block', 'author-row', 'author-name',
       'author-affil', 'abstract-box', 'abstract-title', 'callout', 'callout-note', 'callout-tip', 'callout-warning', 'callout-definition',
-      'callout-title', 'note-box', 'paper-cover', 'paper-cover-institution', 'paper-journal-meta',
+      'callout-title', 'note-box', 'paper-cover', 'paper-cover-institution', 'paper-journal-meta', 'paper-journal-title', 'paper-doi-line',
       'paper-cover-meta', 'paper-figure', 'figure-wrapper', 'figure-image-slot', 'source-table-image',
       'figure-caption', 'figure-label-overlays', 'figure-label-overlay',
       'figure-translation-box', 'figure-translation-header', 'figure-translation-table',
       'fig-comp-cell', 'fig-src-cell', 'fig-vi-cell',
       'translated-diagram', 'diagram-section', 'diagram-title', 'diagram-flow', 'diagram-box', 'diagram-arrow',
-      'table-scroll', 'references-section', 'references-list', 'reference-item'
+      'table-scroll', 'page-footnotes', 'references-section', 'references-list', 'reference-item'
     ]);
 
     [...template.content.querySelectorAll('*')].forEach(element => {
@@ -5124,10 +5391,23 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
       font-size: ${Math.max(11, Math.round(exportFontSize * 0.76))}px;
       font-weight: 600;
       color: #64748b;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
       margin: 0 0 0.5rem 0;
       padding-bottom: 0.35rem;
       border-bottom: 1px solid #e2e8f0;
     }
+    .paper-doi-line {
+      display: block;
+      margin-top: 0.2rem;
+      font-family: monospace;
+      font-size: ${Math.max(11, Math.round(exportFontSize * 0.72))}px;
+      font-weight: 500;
+      text-transform: none;
+      letter-spacing: 0.01em;
+      color: #475569;
+    }
+    .paper-doi-line a { color: #4f46e5; text-decoration: none; }
     h1 { font-size: ${this.h1Size}px; line-height: 1.24; color: #0f172a; margin: 0.8rem 0 1rem; }
     h2 { font-size: ${this.h2Size}px; line-height: 1.3; color: #0f172a; margin: 1.5rem 0 0.8rem; border-bottom: 2px solid #e2e8f0; padding-bottom: 0.4rem; }
     h3 { font-size: ${this.h3Size}px; line-height: 1.35; color: #0f172a; margin: 1.2rem 0 0.6rem; }
@@ -5138,8 +5418,10 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
     .author-affil { color: #64748b; font-size: ${Math.max(11, Math.round(exportFontSize * 0.82))}px; flex: 1 1 260px; }
     .book-section, .source-page { margin: 0; padding: 0; }
     .source-page::before, .source-page-toolbar, .figure-action-bar { display: none !important; }
-    .layout-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin: 1rem 0; }
-    @media (max-width: 768px) { .layout-2col { grid-template-columns: 1fr; } .reference-entries { column-count: 1; } .author-row { flex-direction: column; gap: 0.2rem; } }
+    .layout-2col, .book-columns-2 { display: block; width: 100%; margin: 0.85rem 0; }
+    .page-footnotes { margin-top: 1.1rem; padding-top: 0.5rem; border-top: 1px solid #cbd5e1; font-size: ${Math.max(11, Math.round(exportFontSize * 0.82))}px; line-height: 1.45; color: #475569; }
+    .page-footnotes p { font-size: ${Math.max(11, Math.round(exportFontSize * 0.82))}px; line-height: 1.45; margin-bottom: 0.35rem; color: #475569; }
+    @media (max-width: 768px) { .reference-entries { column-count: 1; } .author-row { flex-direction: column; gap: 0.2rem; } }
     .callout { background: #f8fafc; border-left: 4px solid #6366f1; padding: 1.2rem; border-radius: 8px; margin: 1.5rem 0; }
     .callout-title { font-weight: 700; margin-bottom: 0.5rem; color: #4338ca; }
     .table-scroll { width: 100%; max-width: 100%; overflow-x: auto; margin: 1.2rem 0; }
@@ -5163,18 +5445,27 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
     .fig-src-cell { width: 32%; color: #475569; font-family: monospace; }
     .fig-vi-cell { width: 46%; color: #0f172a; font-weight: 500; }
     .references-section, .references-list, .references-list li, .reference-entries, .reference-entry { font-size: ${Math.max(11, Math.round(exportFontSize * 0.78))}px; line-height: 1.35; }
-    .reference-entries { column-count: 2; column-gap: 1.25rem; column-rule: 1px solid #e2e8f0; }
-    .reference-entry { position: relative; padding-left: 2.35rem; margin: 0 0 0.42rem; break-inside: avoid-column; page-break-inside: avoid; overflow-wrap: anywhere; }
+    .reference-entries { column-count: 1; }
+    .reference-entry { position: relative; padding-left: 2.35rem; margin: 0 0 0.42rem; page-break-inside: avoid; overflow-wrap: anywhere; }
     .reference-number { position: absolute; top: 0; left: 0; width: 2rem; font-variant-numeric: tabular-nums; text-align: right; }
     .reference-text { display: inline; }
     @media print {
-      @page { size: A4; margin: 1.4cm 1.3cm; }
-      body { max-width: none; margin: 0; padding: 0; background: #fff; color: #111; font-size: ${+(exportFontSize * 0.72).toFixed(2)}pt; line-height: 1.38; }
+      @page {
+        size: A4;
+        margin: 1.35cm 1.3cm;
+        @top-left { content: ""; }
+        @top-center { content: ""; }
+        @top-right { content: ""; }
+        @bottom-left { content: ""; }
+        @bottom-center { content: ""; }
+        @bottom-right { content: ""; }
+      }
+      body { max-width: none; margin: 0; padding: 0; background: #fff; color: #111; font-size: ${+(exportFontSize * 0.72).toFixed(2)}pt; line-height: 1.44; }
       p, li { font-size: ${+(exportFontSize * 0.72).toFixed(2)}pt; }
       h1 { font-size: ${+(this.h1Size * 0.72).toFixed(2)}pt; }
       h2 { font-size: ${+(this.h2Size * 0.72).toFixed(2)}pt; }
       h3 { font-size: ${+(this.h3Size * 0.72).toFixed(2)}pt; }
-      .layout-2col { gap: 1.05rem; }
+      .layout-2col, .book-columns-2 { display: block; width: 100%; margin: 0.35rem 0; }
       .table-scroll { overflow: visible; margin: 0.45rem 0; }
       .table-scroll table, table, th, td, .figure-translation-table, .figure-translation-table th, .figure-translation-table td { width: 100%; min-width: 0; font-size: ${+(exportFontSize * 0.72 * 0.82).toFixed(2)}pt; line-height: 1.32; }
       .paper-figure { break-inside: auto; page-break-inside: auto; margin: 0.55rem 0; padding: 0.4rem 0; }
@@ -5183,11 +5474,12 @@ Dưới đây là toàn bộ lớp văn bản trích xuất của từng trang �
       .figure-translation-table th, .figure-translation-table td { padding: 4pt 6pt; }
       table { break-inside: auto; }
       tr { break-inside: avoid; }
+      .page-footnotes, .page-footnotes p { font-size: ${+(exportFontSize * 0.72 * 0.78).toFixed(2)}pt; line-height: 1.3; }
       .references-section { margin: 0.25rem 0 0; padding-top: 0; border-top: 0; break-inside: auto; page-break-inside: auto; }
       .references-section h2, .references-section h3 { margin: 0.35rem 0 0.3rem; font-size: ${+(this.h3Size * 0.72).toFixed(2)}pt; }
-      .references-section, .references-list, .references-list li, .reference-entries, .reference-entry { font-size: ${+(exportFontSize * 0.72 * 0.78).toFixed(2)}pt; line-height: 1.24; }
-      .reference-entries { column-count: 2; column-gap: 1rem; column-rule: 0.35pt solid #cbd5e1; }
-      .reference-entry { margin-bottom: 2.5pt; padding-left: 2.15rem; break-inside: avoid-column; page-break-inside: avoid; }
+      .references-section, .references-list, .references-list li, .reference-entries, .reference-entry { font-size: ${+(exportFontSize * 0.72 * 0.78).toFixed(2)}pt; line-height: 1.26; }
+      .reference-entries { column-count: 1; }
+      .reference-entry { margin-bottom: 2.5pt; padding-left: 2.15rem; page-break-inside: avoid; }
     }
   </style>
 </head>
