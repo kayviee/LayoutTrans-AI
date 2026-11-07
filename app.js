@@ -22,9 +22,12 @@ const TRANSLATION_FONT_PRESETS = Object.freeze({
 
 const VALID_GEMINI_MODELS = new Set([
   'gemini-flash-latest',
+  'gemini-3.1-flash-lite',
+  'gemini-flash-lite-latest',
+  'gemini-2.0-flash',
+  'gemini-2.0-flash-lite',
   'gemini-3.8-flash',
   'gemini-pro-latest',
-  'gemini-3.1-flash-lite',
   'gemini-2.5-flash',
   'gemini-2.5-pro'
 ]);
@@ -266,6 +269,8 @@ class LayoutTransApp {
     this.dropzoneCard = document.getElementById('dropzoneCard');
     this.pdfFileInput = document.getElementById('pdfFileInput');
     this.selectFileBtn = document.getElementById('selectFileBtn');
+    this.htmlFileInput = document.getElementById('htmlFileInput');
+    this.selectHtmlFileBtn = document.getElementById('selectHtmlFileBtn');
     this.dualPaneContainer = document.getElementById('dualPaneContainer');
     this.paneOriginal = document.getElementById('paneOriginal');
     this.paneTranslated = document.getElementById('paneTranslated');
@@ -351,6 +356,15 @@ class LayoutTransApp {
     // File Selection & Drag-Drop
     this.selectFileBtn.addEventListener('click', () => this.pdfFileInput.click());
     this.pdfFileInput.addEventListener('change', (e) => this.handleFileSelect(e));
+    if (this.selectHtmlFileBtn && this.htmlFileInput) {
+      this.selectHtmlFileBtn.addEventListener('click', () => this.htmlFileInput.click());
+      this.htmlFileInput.addEventListener('change', (e) => {
+        if (e.target.files && e.target.files[0]) {
+          this.loadTranslatedHtmlFile(e.target.files[0]);
+          e.target.value = '';
+        }
+      });
+    }
     
     ['dragenter', 'dragover'].forEach(eventName => {
       this.dropzoneCard.addEventListener(eventName, (e) => {
@@ -368,10 +382,15 @@ class LayoutTransApp {
 
     this.dropzoneCard.addEventListener('drop', (e) => {
       const files = e.dataTransfer.files;
-      if (files.length > 0 && files[0].type === 'application/pdf') {
-        this.loadPdfFile(files[0]);
-      } else {
-        this.showToast('Vui lòng chọn file tài liệu định dạng PDF!', 'error');
+      if (files.length > 0) {
+        const f = files[0];
+        if (f.type === 'application/pdf' || /\.pdf$/i.test(f.name)) {
+          this.loadPdfFile(f);
+        } else if (f.type === 'text/html' || /\.html?$/i.test(f.name)) {
+          this.loadTranslatedHtmlFile(f);
+        } else {
+          this.showToast('Vui lòng chọn file PDF hoặc file HTML đã dịch!', 'error');
+        }
       }
     });
 
@@ -768,6 +787,80 @@ class LayoutTransApp {
   handleFileSelect(e) {
     if (e.target.files && e.target.files[0]) {
       this.loadPdfFile(e.target.files[0]);
+    }
+  }
+
+  async loadTranslatedHtmlFile(file) {
+    try {
+      const rawHtml = await file.text();
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(rawHtml, 'text/html');
+      const body = doc.body;
+      if (!body) throw new Error('Không đọc được nội dung HTML.');
+
+      body.querySelectorAll('script, #citationReturnPill, .citation-return-pill').forEach(el => el.remove());
+
+      const sourceSections = [...body.querySelectorAll('section.source-page')];
+      const pageResultsObj = {};
+
+      if (sourceSections.length > 0) {
+        const consolidatedFn = body.querySelector('.consolidated-footnotes');
+        sourceSections.forEach((sec, idx) => {
+          const pNum = parseInt(sec.getAttribute('data-source-page') || String(idx + 1), 10) || (idx + 1);
+          const clone = sec.cloneNode(true);
+          if (idx === sourceSections.length - 1 && consolidatedFn && !clone.querySelector('.page-footnotes')) {
+            clone.appendChild(consolidatedFn.cloneNode(true));
+          }
+          pageResultsObj[pNum] = {
+            pageNum: pNum,
+            html: clone.innerHTML.trim(),
+            qa: { passed: true, code: 'PASS', message: 'khôi phục từ HTML' },
+            savedAt: Date.now()
+          };
+        });
+      } else {
+        pageResultsObj[1] = {
+          pageNum: 1,
+          html: body.innerHTML.trim(),
+          qa: { passed: true, code: 'PASS', message: 'khôi phục từ HTML' },
+          savedAt: Date.now()
+        };
+      }
+
+      const maxPage = Math.max(1, ...Object.keys(pageResultsObj).map(n => parseInt(n, 10)).filter(Number.isFinite));
+      const basePdfName = String(file.name || 'Tai_lieu.html').replace(/\.html?$/i, '.pdf');
+      const safeName = basePdfName.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const docId = `layouttrans_cache_v2_${safeName}_0_${maxPage}`;
+
+      const meta = this.extractMetadataFromPageResults(pageResultsObj, basePdfName);
+      const record = {
+        docId,
+        fileName: basePdfName,
+        fileSize: 0,
+        totalPages: maxPage,
+        translatedPages: meta.translatedCount,
+        paperTitleVi: meta.paperTitleVi,
+        paperCategory: meta.paperCategory,
+        updatedAt: Date.now(),
+        pdfArrayBuffer: null,
+        pageResults: pageResultsObj
+      };
+
+      try {
+        localStorage.setItem(docId, JSON.stringify(pageResultsObj));
+      } catch (e) {}
+
+      const idx = this.libraryBooks.findIndex(b => b.docId === docId);
+      if (idx >= 0) this.libraryBooks[idx] = record;
+      else this.libraryBooks.unshift(record);
+      await this.putBookToIndexedDb(record);
+      this.renderLibraryBookshelf();
+
+      this.openCachedTranslationOnlyBook(record);
+      this.showToast(`✨ Đã mở "${meta.paperTitleVi}" (${meta.translatedCount} trang) trực tiếp không tốn Quota!`, 'success');
+    } catch (err) {
+      console.error('Lỗi nạp file HTML:', err);
+      this.showToast(`Lỗi mở file HTML: ${err.message}`, 'error');
     }
   }
 
@@ -1269,7 +1362,9 @@ class LayoutTransApp {
     const key = this.getDocCacheKey();
     if (!key) return new Map();
     const map = new Map();
-    const libBook = this.libraryBooks.find(b => b.docId === key);
+    const curFileName = String(this.currentFile?.name || '').toLowerCase();
+    const libBook = this.libraryBooks.find(b => b.docId === key)
+      || (curFileName ? this.libraryBooks.find(b => String(b.fileName || '').toLowerCase() === curFileName) : null);
     if (libBook?.pageResults && typeof libBook.pageResults === 'object') {
       Object.entries(libBook.pageResults).forEach(([pageStr, pageResult]) => {
         const pageNum = parseInt(pageStr, 10);
@@ -2176,8 +2271,8 @@ class LayoutTransApp {
           }
         }
 
-        // Automatic fallback to another Free-Tier model when the current model hits its 20 RPD daily quota limit
-        if (this.isHardQuotaError(error)) {
+        // Automatic fallback to another Free-Tier model when the current model hits any quota / rate limit (429 RESOURCE_EXHAUSTED)
+        if (this.isQuotaError(error)) {
           const exhaustedMatch = String(error?.message || '').match(/model:\s*([a-zA-Z0-9._-]+)/i);
           if (exhaustedMatch && exhaustedMatch[1]) {
             const exhaustedModel = exhaustedMatch[1].trim();
@@ -2186,13 +2281,16 @@ class LayoutTransApp {
               attemptedModels.add('gemini-flash-latest');
             }
           }
+          if (requestModel === 'gemini-flash-latest') {
+            attemptedModels.add('gemini-3.8-flash');
+          }
           const quotaFallbackModel = await this.resolveReplacementModelForQuota(requestModel, attemptedModels);
           if (quotaFallbackModel && quotaFallbackModel !== requestModel) {
             const oldLabel = this.getModelDisplayName(requestModel);
             const newLabel = this.getModelDisplayName(quotaFallbackModel);
             this.applyActiveModelSelection(quotaFallbackModel);
             requestModel = quotaFallbackModel;
-            this.showToast(`⚡ ${oldLabel} đã chạm trần 20 lượt miễn phí/ngày — Đã tự động chuyển sang ${newLabel} để dịch tiếp!`, 'info');
+            this.showToast(`⚡ ${oldLabel} đã chạm hạn mức Quota miễn phí — Đã tự động chuyển sang ${newLabel} để dịch tiếp!`, 'info');
             attempt = Math.max(0, attempt - 1);
             continue;
           }
@@ -2313,11 +2411,14 @@ class LayoutTransApp {
     const quotaFallbackOrder = [
       'gemini-3.1-flash-lite',
       'gemini-flash-lite-latest',
+      'gemini-2.0-flash',
+      'gemini-2.0-flash-lite',
       'gemini-3.8-flash-lite',
+      'gemini-2.5-flash-lite',
       'gemini-pro-latest',
       'gemini-3.8-flash',
       'gemini-flash-latest',
-      ...(this.availableModelNames ? [...this.availableModelNames].filter(m => /gemini.*flash.*lite/i.test(m)) : []),
+      ...(this.availableModelNames ? [...this.availableModelNames].filter(m => /gemini.*flash.*lite/i.test(m) && !/tts|image|audio|thinking/i.test(m)) : []),
       ...(this.availableModelNames ? [...this.availableModelNames].filter(m => /gemini.*flash/i.test(m) && !/tts|image|audio|thinking/i.test(m)) : []),
       ...(this.availableModelNames ? [...this.availableModelNames].filter(m => /gemini.*pro/i.test(m) && !/tts|image|audio/i.test(m)) : [])
     ];
@@ -2370,6 +2471,9 @@ class LayoutTransApp {
       'gemini-3.8-flash': 'Gemini 3.8 Flash',
       'gemini-pro-latest': 'Gemini Pro Latest',
       'gemini-3.1-flash-lite': 'Gemini 3.1 Flash-Lite',
+      'gemini-flash-lite-latest': 'Gemini Flash-Lite Latest',
+      'gemini-2.0-flash': 'Gemini 2.0 Flash',
+      'gemini-2.0-flash-lite': 'Gemini 2.0 Flash-Lite',
       'gemini-2.5-flash': 'Gemini 2.5 Flash',
       'gemini-2.5-pro': 'Gemini 2.5 Pro',
       'gemini-2.5-flash-lite': 'Gemini 2.5 Flash-Lite'
@@ -3507,19 +3611,35 @@ class LayoutTransApp {
   formatBeginnerExplanationsAndTerms(root) {
     if (!root) return;
     const blocks = [...root.querySelectorAll('p, li, td, blockquote')].filter(el => (
-      !el.closest('.references-section, .page-footnotes, .authors-block, .source-page-toolbar, .figure-action-bar')
-      && (el.textContent || '').toLowerCase().includes('hiểu đơn giản')
+      !el.closest('.references-section, .authors-block, .source-page-toolbar, .figure-action-bar')
+      && (/\([^()\n]{2,220}\)/.test(el.textContent || '') || (el.textContent || '').toLowerCase().includes('hiểu đơn giản'))
     ));
     if (blocks.length === 0) return;
 
+    const isEnglishGloss = parenInner => {
+      const s = String(parenInner || '').replace(/\[hiểu đơn giản:[^\]]+\]/gi, '').trim();
+      if (!s || s.length < 2) return false;
+      if (/^(?:xem|ví dụ|e\.g\.|i\.e\.|bảng|table|hình|fig|\d{4}|[\d\s,–-]+)\b/i.test(s)) return false;
+      if (/ALL\s*=/i.test(s)) return false;
+      if (/@|https?:\/\//i.test(s)) return false;
+      if (/^(?:RQ\s*[I123V]+|Câu hỏi nghiên cứu.*|WoS.*|CC BY.*|Jascha Bareis|Clemens Ackerl|Reinhard Heil)$/i.test(s)) return false;
+      if (/^(?:xã hội|công bố|hoặc tước bỏ|dù có thể còn xa xôi|nhiều hơn nữa|không nhất thiết.*|về vật chất.*|vật chất.*|nếu có|ít nhất|để được chỉ định.*|có thể vận hành.*|do đó là.*|tự|và chỉ ra cách|chỉ đơn giản là|các|xa vời|địa|được dự đoán|để lôi kéo.*|nếu làm xao lãng.*|và rủi ro sinh tồn|mất|siêu|bất|về mặt cá nhân.*|sự phát triển của|chẳng hạn như.*|câu hỏi nghiên cứu.*)$/i.test(s)) return false;
+      const strippedAllowedVi = s.replace(/\b(?:gọi tắt là|viết tắt là|còn gọi là|hay|hoặc|tức là|tức|ví dụ|gồm|chủ nghĩa|thuyết|lòng|tư duy|cú bộc phát|mã số tài trợ|các hệ thống AI giao tiếp)[^)]*/gi, '').trim();
+      const hasViDiacritics = /[àáảãạăắằẳẵặâấầẩẫậđèéẻẽẹêếềểễệìíỉĩịòóỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵ]/i.test(strippedAllowedVi);
+      if (hasViDiacritics) return false;
+      return /[a-zA-Z]{2,}/.test(strippedAllowedVi);
+    };
+
     const boundaryRe = new RegExp(
       '(?:'
-      + '(?:kịch\\s+bản\\s+tương\\s+lai|phạm\\s+vi\\s+tranh\\s+luận|cuộc\\s+tranh\\s+luận|tranh\\s+luận|diễn\\s+ngôn(?:\\s+chủ\\s+đạo)?|sự\\s+kết\\s+thúc|sự\\s+ra\\s+đời|sự\\s+xuất\\s+hiện|khả\\s+năng\\s+xảy\\s+ra|xác\\s+suất\\s+để|từ\\s+góc\\s+độ|xuất\\s+phát\\s+từ\\s+phong\\s+trào|xuất\\s+phát\\s+từ|phản\\s+ứng\\s+bằng|tập\\s+trung\\s+vào\\s+các\\s+giá\\s+trị\\s+được\\s+bảo\\s+vệ\\s+như|xem\\s+agi\\s+như|gắn\\s+liền\\s+với\\s+các\\s+sự\\s+kiện\\s+tương\\s+lai|các\\s+phép\\s+tính\\s+mang\\s+tính\\s+suy\\s+đoán|phép\\s+tính\\s+mang\\s+tính\\s+suy\\s+đoán|bao\\s+quát\\s+được\\s+lượng|bao\\s+quát\\s+được|thông\\s+qua\\s+việc|liên\\s+quan\\s+đến|xoay\\s+quanh|dựa\\s+trên|với\\s+xu\\s+hướng|coi\\s+là|đúc\\s+rút\\s+ra|đề\\s+xuất|gợi\\s+ý|phản\\s+ánh|chỉ\\s+ra|lưu\\s+ý|viện\\s+dẫn|phạm\\s+phải|cung\\s+cấp|tạo\\s+ra|hướng\\s+tới|gọi\\s+là|được\\s+gọi\\s+là)'
-      + '(?:\\s+(?:về|của|đối\\s+với|xoay\\s+quanh|một|các|những))?'
-      + '|\\b(?:là|như\\s+một|như\\s+các|như\\s+là|như|theo|do|vào|với|cho|để|bằng|tại|trên|dưới|hay|hoặc|và)\\b(?:\\s+(?:một|các|những))?'
+      + '(?:nghiên\\s+cứu\\s+khoa\\s+học\\s+đã\\s+qua|bài\\s+báo\\s+khoa\\s+học\\s+đã\\s+qua|ấn\\s+phẩm\\s+học\\s+thuật\\s+đã\\s+qua|ấn\\s+phẩm\\s+chưa\\s+qua|bài\\s+báo\\s+được|tài\\s+liệu\\s+được|tập\\s+hợp\\s+các\\s+tài\\s+liệu\\s+được|kịch\\s+bản\\s+tương\\s+lai|phạm\\s+vi\\s+tranh\\s+luận|cuộc\\s+tranh\\s+luận|tranh\\s+luận|diễn\\s+ngôn(?:\\s+chủ\\s+đạo)?|sự\\s+kết\\s+thúc|sự\\s+ra\\s+đời|sự\\s+xuất\\s+hiện|sự\\s+tiến\\s+bộ|khả\\s+năng\\s+xảy\\s+ra|xác\\s+suất\\s+để|từ\\s+góc\\s+độ|xuất\\s+phát\\s+từ\\s+phong\\s+trào|xuất\\s+phát\\s+từ|phản\\s+ứng\\s+bằng|tập\\s+trung\\s+vào\\s+các\\s+giá\\s+trị\\s+được\\s+bảo\\s+vệ\\s+như|trình\\s+bày\\s+trọng\\s+tâm\\s+về|xem\\s+agi\\s+như|coi\\s+ngang\\s+hàng\\s+với\\s+con\\s+người\\s+như|được\\s+hiểu\\s+như\\s+là|được\\s+hiểu\\s+như|gắn\\s+liền\\s+với\\s+các\\s+sự\\s+kiện\\s+tương\\s+lai|các\\s+phép\\s+tính\\s+mang\\s+tính\\s+suy\\s+đoán|phép\\s+tính\\s+mang\\s+tính\\s+suy\\s+đoán|bao\\s+quát\\s+được\\s+lượng|bao\\s+quát\\s+được|vị\\s+thế\\s+quyền\\s+lực\\s+của|quyền\\s+sở\\s+hữu\\s+đối\\s+với\\s+hạ\\s+tầng\\s+cơ\\s+sở|phân\\s+bổ\\s+các\\s+nguồn|xem\\s+xét\\s+các\\s+vấn\\s+đề\\s+về|xem\\s+xét\\s+các|bắt\\s+nhịp\\s+với|xoay\\s+quanh\\s+ý\\s+niệm\\s+về|xoay\\s+quanh\\s+câu\\s+hỏi|xoay\\s+quanh|dưới\\s+dạng\\s+các|dưới\\s+dạng|theo\\s+khuôn\\s+khổ|theo\\s+thể\\s+thức|trong\\s+các\\s+lĩnh\\s+vực|các\\s+lĩnh\\s+vực|tại\\s+điểm\\s+giao\\s+thoa\\s+giữa\\s+giới\\s+công\\s+nghệ|một\\s+tuyên\\s+bố\\s+từ|tuyên\\s+bố\\s+từ|làm\\s+việc\\s+thuộc|áp\\s+đặt\\s+trách\\s+nhiệm\\s+pháp\\s+lý\\s+đối\\s+với|những\\s+đặc\\s+điểm\\s+của|đặt\\s+tên\\s+một\\s+cách\\s+thích\\s+hợp\\s+là|thậm\\s+chí\\s+còn\\s+được\\s+gọi\\s+là|nhận\\s+thức\\s+được|thay\\s+đổi\\s+từ\\s+ai\\s+sang\\s+agi\\s+và|tiềm\\s+tàng\\s+do|liên\\s+quan\\s+đến|thông\\s+qua\\s+việc|dựa\\s+trên|với\\s+xu\\s+hướng|coi\\s+là|đúc\\s+rút\\s+ra|đề\\s+xuất|gợi\\s+ý|phản\\s+ánh|chỉ\\s+ra|lưu\\s+ý|viện\\s+dẫn|phạm\\s+phải|cung\\s+cấp|tạo\\s+ra|hướng\\s+tới|gọi\\s+là|được\\s+gọi\\s+là|bị\\s+thúc\\s+đẩy\\s+bởi|vào\\s+các\\s+hệ\\s+thống|sự\\s+xuất\\s+hiện\\s+của|sản\\s+xuất\\s+các|gán\\s+các\\s+năng\\s+lực\\s+như|dùng\\s+hoán\\s+đổi\\s+cho\\s+các\\s+thuật\\s+ngữ\\s+như|trong\\s+tập\\s+hợp|bỏ\\s+qua\\s+các|cùng\\s+một\\s+số|liệu\\s+các|đề\\s+cập\\s+đến\\s+việc\\s+đạt\\s+được\\s+các\\s+trạng\\s+thái\\s+tinh\\s+thần\\/nhận\\s+thức\\s+như|những\\s+tiêu\\s+chí\\s+suy\\s+đoán\\s+như|phát\\s+triển\\s+thành|ủng\\s+hộ\\s+việc\\s+tạo\\s+ra|vận\\s+hành\\s+bằng|cho\\s+phép\\s+tính\\s+về|tương\\s+tự\\s+như\\s+vậy|bằng\\s+cách\\s+nào|bao\\s+gồm\\s+các\\s+nhiệm\\s+vụ\\s+như\\s+chỉ\\s+huy\\s+và\\s+kiểm\\s+soát\\s+từ|quan\\s+sát\\s+được\\s+trong|hiểu\\s+biết\\s+dựa\\s+trên|nhầm\\s+lẫn\\s+với|khuôn\\s+khổ\\s+đạo\\s+đức\\s+gây\\s+nhiều\\s+tranh\\s+cãi|tiến\\s+hành|trình\\s+bày|bao\\s+gồm|khảo\\s+sát|thảo\\s+luận\\s+về\\s+ai\\s+như|các\\s+quan\\s+điểm\\s+về|tổng\\s+quan\\s+tài\\s+liệu\\s+của\\s+họ\\s+về|nhằm\\s+mục\\s+tiêu|nhằm|tài\\s+trợ\\s+bởi|dán\\s+nhãn\\s+là|nghiên\\s+cứu\\s+trong|thể\\s+hiện|sử\\s+dụng|cung\\s+cấp\\s+các|làm\\s+việc\\s+với\\s+các\\s+tiền\\s+đề\\s+vững\\s+chắc\\s+làm|hỗ\\s+trợ\\s+nâng\\s+cao|nghiên\\s+cứu\\s+rủi\\s+ro\\s+sinh\\s+tồn\\s+trong|những\\s+người\\s+ủng\\s+hộ|bác\\s+bỏ\\s+cách\\s+định\\s+nghĩa\\s+mang\\s+tính\\s+cơ\\s+giới\\s+và|tạp\\s+chí\\s+của|kích\\s+thích\\s+trí\\s+tưởng\\s+tượng\\s+và|chúng|gắn\\s+chặt\\s+với|mang\\s+tính|phê\\s+phán\\s+về|ảnh\\s+hưởng\\s+khác\\s+nhau\\s+như|cốt\\s+lõi\\s+về|nghiên\\s+cứu\\s+về|AI\\s+cấp\\s+dưới\\s+con\\s+người\\s+và|nhắc\\s+lại\\s+các\\s+khái\\s+niệm\\s+về|tuyên\\s+bố\\s+khả\\s+năng\\s+xảy\\s+ra|ngụ\\s+ý|bài\\s+viết\\s+về|câu\\s+hỏi\\s+về\\s+việc|trách\\s+nhiệm\\s+của)'
+      + '(?:\\s+(?:về|của|đối\\s+với|xoay\\s+quanh|một\\s+hoặc\\s+nhiều|một|các|những))?'
+      + '|\\b(?:từ\\s+khóa|khi|trong|là|như\\s+một|như\\s+các|như\\s+là|như|theo|do|vào|với|cho|để|bằng|tại|trên|dưới|hay|hoặc|và)\\b(?:\\s+(?:một\\s+hoặc\\s+nhiều|một|các|những))?'
       + ')\\s+',
       'gi'
     );
+
+    const fixedTailTermRe = /(mô\s+hình\s+tăng\s+trưởng\s+theo\s+chủ\s+nghĩa\s+gia\s+tốc|AI\s+đa\s+dụng|người\s+đấu\s+với\s+máy|cộng\s+đồng\s+nghiên\s+cứu\s+rủi\s+ro\s+sinh\s+tồn(?:\s+từ\s+AI)?|tương\s+lai\s+rủi\s+ro\s+sinh\s+tồn\s+từ\s+AI|khoảng\s+thời\s+gian\s+cơ\s+hội\s+rất\s+ngắn|hệ\s+thống\s+đo\s+lường\s+định\s+lượng|sự\s+thổi\s+phồng\s+cường\s+điệu\s+xung\s+quanh\s+AI|Bộ\s+Nghiên\s+cứu,\s+Công\s+nghệ\s+và\s+Không\s+gian\s+Liên\s+bang\s+Đức|tập\s+hợp\s+tài\s+liệu\s+nghiên\s+cứu)\s*$/i;
 
     const splitViPrefixAndTerm = beforeStr => {
       // 1. If beforeStr ends with a quoted term ("..." or “...”), that quoted phrase is the exact Vietnamese term
@@ -3531,9 +3651,18 @@ class LayoutTransApp {
         };
       }
 
-      // 2. Otherwise start after the last clause punctuation
+      // 2. Check fixed multi-word terms that contain internal prepositions/conjunctions
+      const fixedMatch = beforeStr.match(fixedTailTermRe);
+      if (fixedMatch && fixedMatch.index !== undefined) {
+        return {
+          prefix: beforeStr.slice(0, fixedMatch.index),
+          viTerm: beforeStr.slice(fixedMatch.index)
+        };
+      }
+
+      // 3. Otherwise start after the last clause punctuation
       let clauseStart = 0;
-      const punctRe = /[,.;:!?—–()[\]"“”\n]/g;
+      const punctRe = /[,.;:!?—–()[\]"“”·\n]/g;
       let pm;
       while ((pm = punctRe.exec(beforeStr)) !== null) {
         clauseStart = pm.index + pm[0].length;
@@ -3541,7 +3670,7 @@ class LayoutTransApp {
       let prefix = beforeStr.slice(0, clauseStart);
       let clause = beforeStr.slice(clauseStart);
 
-      // 3. Find the last discourse/verb/preposition boundary inside clause
+      // 4. Find the last discourse/verb/preposition boundary inside clause
       const matches = [...clause.matchAll(boundaryRe)];
       for (let i = matches.length - 1; i >= 0; i--) {
         const m = matches[i];
@@ -3549,9 +3678,14 @@ class LayoutTransApp {
         const rem = clause.slice(endPos).trim();
         const beforeM = clause.slice(0, m.index || 0).trim();
         const matchedWord = m[0].trim().toLowerCase();
-        if (!rem || rem.length < 3) continue;
-        // Keep parallel "có tính X và tính Y" together
-        if (matchedWord === 'và' && /có\s+tính\s+\S+(?:\s+\S+)?$/i.test(beforeM) && /^tính\s+/i.test(rem)) {
+        if (!rem || rem.length < 2) continue;
+        // Keep parallel compound phrases together
+        if (matchedWord === 'và' && (
+          (/có\s+tính\s+\S+(?:\s+\S+)?$/i.test(beforeM) && /^tính\s+/i.test(rem))
+          || (/cấu\s+trúc$/i.test(beforeM) && /^kỹ\s+thuật/i.test(rem))
+          || (/nghiên\s+cứu$/i.test(beforeM) && /^đổi\s+mới/i.test(rem))
+          || (/khoa\s+học$/i.test(beforeM) && /^công\s+nghệ/i.test(rem))
+        )) {
           continue;
         }
         prefix += clause.slice(0, endPos);
@@ -3559,9 +3693,15 @@ class LayoutTransApp {
         break;
       }
 
-      // 4. Strip leading articles "một ", "các ", "những "
-      const artMatch = clause.match(/^(\s*(?:một|các|những)\s+)/i);
-      if (artMatch && clause.slice(artMatch[0].length).trim().length >= 4) {
+      // 5. Strip leading articles / connectors "và ", "hoặc ", "cho đến ", "đến ", "một ", "các ", "những "
+      const connMatch = clause.match(/^(\s*(?:cho\s+đến|đến|và|hoặc|hay|cùng|như)(?:\s+(?:một\s+hoặc\s+nhiều|một\s+số|một|các|những|nhiều|lượng))?\s+)/i);
+      if (connMatch && clause.slice(connMatch[0].length).trim().length >= 3) {
+        prefix += clause.slice(0, connMatch[0].length);
+        clause = clause.slice(connMatch[0].length);
+      }
+
+      const artMatch = clause.match(/^(\s*(?:một\s+hoặc\s+nhiều|một\s+số|một|các|những|nhiều|lượng)\s+)/i);
+      if (artMatch && clause.slice(artMatch[0].length).trim().length >= 3) {
         prefix += clause.slice(0, artMatch[0].length);
         clause = clause.slice(artMatch[0].length);
       }
@@ -3577,11 +3717,11 @@ class LayoutTransApp {
       "'": '&#39;'
     }[ch]));
 
-    // Combined regex matching:
-    // Group 1 & 2: (<enTerm> [hiểu đơn giản: ...])  (nested inside parentheses)
-    // Group 3, 4, 5: (<enTerm>) <optional citation/modifier> [hiểu đơn giản: ...]  (adjacent)
-    // Group 6: standalone [hiểu đơn giản: ...] without preceding (<enTerm>)
-    const explainPattern = /(\([^()\n]{2,140}?)\s*(\[hiểu đơn giản:\s*[^\]]+\])\)|(\([^()\n]{2,140}\))(\s*(?:\[\d[^\]]*\]|đầy vấn đề|bên trong máy tính)?\s*)(\[hiểu đơn giản:\s*[^\]]+\])|(\[hiểu đơn giản:\s*[^\]]+\])/gi;
+    // Combined regex matching EVERY bilingual term "(English Term)" as well as optional "[hiểu đơn giản: ...]":
+    // Group 1: (<parenInner>) where parenInner may optionally contain "[hiểu đơn giản: ...]"
+    // Group 2 & 3: optional modifier/citation + adjacent "[hiểu đơn giản: ...]" right after (<parenInner>)
+    // Group 4: standalone "[hiểu đơn giản: ...]" without a preceding parenthetical
+    const bilingualAndExplainPattern = /\(([^()\n]{2,220})\)(?:(\s*(?:\[\d[^\]]*\]|đầy vấn đề|bên trong máy tính)?\s*)(\[hiểu đơn giản:\s*[^\]]+\]))?|(\[hiểu đơn giản:\s*[^\]]+\])/gi;
 
     blocks.forEach(block => {
       if (block.dataset.termsFormatted === 'true') return;
@@ -3596,53 +3736,80 @@ class LayoutTransApp {
       const textNodes = [];
       let current;
       while ((current = walker.nextNode())) {
-        if ((current.nodeValue || '').toLowerCase().includes('hiểu đơn giản')) {
+        const val = current.nodeValue || '';
+        if (/\([^()\n]{2,220}\)/.test(val) || val.toLowerCase().includes('hiểu đơn giản')) {
           textNodes.push(current);
         }
       }
 
       textNodes.forEach(textNode => {
         const raw = textNode.nodeValue || '';
-        explainPattern.lastIndex = 0;
+        bilingualAndExplainPattern.lastIndex = 0;
         let lastIndex = 0;
         let htmlOut = '';
         let matchedAny = false;
         let match;
 
-        while ((match = explainPattern.exec(raw)) !== null) {
-          matchedAny = true;
-          const beforeSegment = raw.slice(lastIndex, match.index);
-          const { prefix, viTerm } = splitViPrefixAndTerm(beforeSegment);
-          const leadingWsMatch = viTerm.match(/^\s*/);
-          const trailingWsMatch = viTerm.match(/\s*$/);
-          const leadWs = leadingWsMatch ? leadingWsMatch[0] : '';
-          const trailWs = trailingWsMatch ? trailingWsMatch[0] : '';
-          const cleanViTerm = viTerm.trim();
+        while ((match = bilingualAndExplainPattern.exec(raw)) !== null) {
+          if (match[1] !== undefined) {
+            const parenInner = match[1];
+            const midMod = match[2] || '';
+            const adjExplain = match[3] || '';
+            const nestedExplainMatch = parenInner.match(/^(.*?)\s*(\[hiểu đơn giản:\s*[^\]]+\])\s*$/i);
 
-          htmlOut += escapeHtml(prefix);
-          if (cleanViTerm) {
-            htmlOut += `${escapeHtml(leadWs)}<strong class="term-vi">${escapeHtml(cleanViTerm)}</strong>${escapeHtml(trailWs)}`;
-          } else {
-            htmlOut += escapeHtml(viTerm);
+            if (!isEnglishGloss(parenInner) && !nestedExplainMatch && !adjExplain) {
+              continue;
+            }
+
+            matchedAny = true;
+            const beforeSegment = raw.slice(lastIndex, match.index);
+            const { prefix, viTerm } = splitViPrefixAndTerm(beforeSegment);
+            const leadingWsMatch = viTerm.match(/^\s*/);
+            const trailingWsMatch = viTerm.match(/\s*$/);
+            const leadWs = leadingWsMatch ? leadingWsMatch[0] : '';
+            const trailWs = trailingWsMatch ? trailingWsMatch[0] : '';
+            const cleanViTerm = viTerm.trim();
+
+            htmlOut += escapeHtml(prefix);
+            if (cleanViTerm) {
+              htmlOut += `${escapeHtml(leadWs)}<strong class="term-vi">${escapeHtml(cleanViTerm)}</strong>${escapeHtml(trailWs)}`;
+            } else {
+              htmlOut += escapeHtml(viTerm);
+            }
+
+            if (nestedExplainMatch) {
+              const enClean = nestedExplainMatch[1].trim();
+              const expClean = nestedExplainMatch[2].trim();
+              htmlOut += `<span class="term-gloss">(<strong class="term-en">${escapeHtml(enClean)}</strong> <em class="term-explain">${escapeHtml(expClean)}</em>)</span>`;
+            } else if (adjExplain) {
+              const enClean = parenInner.trim();
+              const expClean = adjExplain.trim();
+              htmlOut += `<span class="term-gloss">(<strong class="term-en">${escapeHtml(enClean)}</strong>)</span>${escapeHtml(midMod)}<em class="term-explain">${escapeHtml(expClean)}</em>`;
+            } else {
+              const enClean = parenInner.trim();
+              htmlOut += `<span class="term-gloss">(<strong class="term-en">${escapeHtml(enClean)}</strong>)</span>`;
+            }
+
+            lastIndex = bilingualAndExplainPattern.lastIndex;
+          } else if (match[4]) {
+            matchedAny = true;
+            const beforeSegment = raw.slice(lastIndex, match.index);
+            const { prefix, viTerm } = splitViPrefixAndTerm(beforeSegment);
+            const leadingWsMatch = viTerm.match(/^\s*/);
+            const trailingWsMatch = viTerm.match(/\s*$/);
+            const leadWs = leadingWsMatch ? leadingWsMatch[0] : '';
+            const trailWs = trailingWsMatch ? trailingWsMatch[0] : '';
+            const cleanViTerm = viTerm.trim();
+
+            htmlOut += escapeHtml(prefix);
+            if (cleanViTerm) {
+              htmlOut += `${escapeHtml(leadWs)}<strong class="term-vi">${escapeHtml(cleanViTerm)}</strong>${escapeHtml(trailWs)}`;
+            } else {
+              htmlOut += escapeHtml(viTerm);
+            }
+            htmlOut += `<em class="term-explain">${escapeHtml(match[4].trim())}</em>`;
+            lastIndex = bilingualAndExplainPattern.lastIndex;
           }
-
-          if (match[1] && match[2]) {
-            // Nested: (<enTerm> [hiểu đơn giản: ...])
-            const enInner = match[1].slice(1).trim();
-            const expPart = match[2].trim();
-            htmlOut += `<span class="term-gloss">(<strong class="term-en">${escapeHtml(enInner)}</strong> <em class="term-explain">${escapeHtml(expPart)}</em>)</span>`;
-          } else if (match[3] && match[5]) {
-            // Adjacent: (<enTerm>) <mid> [hiểu đơn giản: ...]
-            const enFull = match[3].trim();
-            const midPart = match[4] || ' ';
-            const expPart = match[5].trim();
-            htmlOut += `<strong class="term-en">${escapeHtml(enFull)}</strong>${escapeHtml(midPart)}<em class="term-explain">${escapeHtml(expPart)}</em>`;
-          } else if (match[6]) {
-            // Standalone: [hiểu đơn giản: ...]
-            htmlOut += `<em class="term-explain">${escapeHtml(match[6].trim())}</em>`;
-          }
-
-          lastIndex = explainPattern.lastIndex;
         }
 
         if (matchedAny) {
