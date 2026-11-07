@@ -2162,7 +2162,7 @@ class LayoutTransApp {
         }
         if (error.name === 'AbortError') throw error;
 
-        // Automatic recovery when a model is deprecated/unavailable (HTTP 404 or "no longer available to new users")
+        // Automatic recovery when a model is deprecated/unavailable (HTTP 404)
         if (this.isModelNotFoundError(error)) {
           const replacementModel = await this.resolveReplacementModelForNotFound(error, requestModel, attemptedModels);
           if (replacementModel && replacementModel !== requestModel) {
@@ -2171,6 +2171,28 @@ class LayoutTransApp {
             this.applyActiveModelSelection(replacementModel);
             requestModel = replacementModel;
             this.showToast(`Model ${oldLabel} đã ngừng hỗ trợ cho Key này — Đã tự động chuyển sang ${newLabel} và tiếp tục dịch!`, 'info');
+            attempt = Math.max(0, attempt - 1);
+            continue;
+          }
+        }
+
+        // Automatic fallback to another Free-Tier model when the current model hits its 20 RPD daily quota limit
+        if (this.isHardQuotaError(error)) {
+          const exhaustedMatch = String(error?.message || '').match(/model:\s*([a-zA-Z0-9._-]+)/i);
+          if (exhaustedMatch && exhaustedMatch[1]) {
+            const exhaustedModel = exhaustedMatch[1].trim();
+            attemptedModels.add(exhaustedModel);
+            if (exhaustedModel === 'gemini-3.8-flash') {
+              attemptedModels.add('gemini-flash-latest');
+            }
+          }
+          const quotaFallbackModel = await this.resolveReplacementModelForQuota(requestModel, attemptedModels);
+          if (quotaFallbackModel && quotaFallbackModel !== requestModel) {
+            const oldLabel = this.getModelDisplayName(requestModel);
+            const newLabel = this.getModelDisplayName(quotaFallbackModel);
+            this.applyActiveModelSelection(quotaFallbackModel);
+            requestModel = quotaFallbackModel;
+            this.showToast(`⚡ ${oldLabel} đã chạm trần 20 lượt miễn phí/ngày — Đã tự động chuyển sang ${newLabel} để dịch tiếp!`, 'info');
             attempt = Math.max(0, attempt - 1);
             continue;
           }
@@ -2258,6 +2280,49 @@ class LayoutTransApp {
     ];
 
     for (const candidate of candidateOrder) {
+      if (
+        candidate !== currentModel
+        && !attemptedModels.has(candidate)
+        && (!this.availableModelNames || this.availableModelNames.has(candidate))
+      ) {
+        return candidate;
+      }
+    }
+    return null;
+  }
+
+  async resolveReplacementModelForQuota(currentModel, attemptedModels = new Set()) {
+    if (!this.availableModelNames && this.apiKey) {
+      try {
+        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(this.apiKey)}`);
+        if (res.ok) {
+          const data = await res.json();
+          const supported = (data.models || [])
+            .filter(m => !Array.isArray(m.supportedGenerationMethods) || m.supportedGenerationMethods.includes('generateContent'))
+            .map(m => String(m.name || '').replace(/^models\//, ''))
+            .filter(Boolean);
+          if (supported.length > 0) {
+            this.availableModelNames = new Set(supported);
+          }
+        }
+      } catch (e) {
+        console.warn('Không thể tải danh sách model dự phòng khi hết quota:', e);
+      }
+    }
+
+    const quotaFallbackOrder = [
+      'gemini-3.1-flash-lite',
+      'gemini-flash-lite-latest',
+      'gemini-3.8-flash-lite',
+      'gemini-pro-latest',
+      'gemini-3.8-flash',
+      'gemini-flash-latest',
+      ...(this.availableModelNames ? [...this.availableModelNames].filter(m => /gemini.*flash.*lite/i.test(m)) : []),
+      ...(this.availableModelNames ? [...this.availableModelNames].filter(m => /gemini.*flash/i.test(m) && !/tts|image|audio|thinking/i.test(m)) : []),
+      ...(this.availableModelNames ? [...this.availableModelNames].filter(m => /gemini.*pro/i.test(m) && !/tts|image|audio/i.test(m)) : [])
+    ];
+
+    for (const candidate of quotaFallbackOrder) {
       if (
         candidate !== currentModel
         && !attemptedModels.has(candidate)
